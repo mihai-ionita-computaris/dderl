@@ -132,17 +132,17 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
               ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
               NewTnsstr
       end,
-    OciPort = erloci:new([{logging, true}, {env, [{"NLS_LANG", NLS_LANG}]}], fun oci_adapter:logfun/1),
-    case OciPort:get_session(TNS, User, Password, dderl_dal:user_name(UserId)) of
-        {_, ErlOciSessionPid, _} = Connection when is_pid(ErlOciSessionPid) ->
-            ?Debug("ErlOciSession ~p", [Connection]),
+    OraCtx = dpi:context_create(3, 0),
+    OraConn = dpi:conn_create(OraCtx, User, Password, TNS, #{}, #{}),    
+            ?Debug("OranifSession ~p ~p", [OraCtx, OraConn]),
             Con = #ddConn {id = Id, name = Name, owner = UserId, adapter = oci,
                            access  = jsx:decode(jsx:encode(BodyJson),
                                                 [return_maps])},
                     ?Debug([{user, User}], "may save/replace new connection ~p", [Con]),
             case dderl_dal:add_connect(Sess, Con) of
                 {error, Msg} ->
-                    dderloci:close_port(Connection),
+                    dpi:conn_release(OraConn),
+                    dpi:context_destroy(OraCtx),
                     From ! {reply, jsx:encode([{<<"connect">>,[{<<"error">>, Msg}]}])};
                 #ddConn{owner = Owner} = NewConn ->
                     From ! {reply
@@ -151,21 +151,23 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
                                   , [{<<"conn_id">>, NewConn#ddConn.id}
                                      , {<<"owner">>, Owner}
                                      , {<<"conn">>
-                                        , ?E2B(Connection)}
+                                        , ?E2B(OraConn)}
                                     ]}])}
             end,
-            Priv#priv{connections = [Connection|Connections]};
-        {error, {_Code, Msg}} = Error when is_list(Msg) ->
-            ?Error("DB connect error ~p", [Error]),
-            OciPort:close(),
-            From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
-            Priv;
-        Error ->
-            ?Error("DB connect error ~p", [Error]),
-            OciPort:close(),
-            From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
-            Priv
-    end;
+            Priv#priv{connections = [OraConn|Connections]};
+
+            %% TODO: manage the context
+        %{error, {_Code, Msg}} = Error when is_list(Msg) ->
+        %    ?Error("DB connect error ~p", [Error]),
+        %    OciPort:close(),
+        %    From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
+        %    Priv;
+        %Error ->
+        %    ?Error("DB connect error ~p", [Error]),
+        %    OciPort:close(),
+        %    From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
+        %    Priv
+    %end;
 
 process_cmd({[<<"change_conn_pswd">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
     [{<<"change_pswd">>, BodyJson}] = ReqBody,

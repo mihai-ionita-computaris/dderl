@@ -5,20 +5,20 @@
 
 %% API
 -export([
-    exec/3,
-    exec/4,
-    change_password/4,
-    add_fsm/2,
-    fetch_recs_async/3,
-    fetch_close/1,
-    filter_and_sort/6,
-    close/1,
-    close_port/1,
-    run_table_cmd/3,
-    cols_to_rec/2,
-    get_alias/1,
-    fix_row_format/4,
-    create_rowfun/3
+    exec/3,                 %   ✓
+    exec/4,                 %   ✓
+    change_password/4,      %   ✓
+    add_fsm/2,              %
+    fetch_recs_async/3,     %
+    fetch_close/1,          %
+    filter_and_sort/6,      %
+    close/1,                %
+    close_port/1,           %
+    run_table_cmd/3,        %   ✓
+    cols_to_rec/2,          %
+    get_alias/1,            %
+    fix_row_format/4,       %
+    create_rowfun/3         %
 ]).
 
 %% gen_server callbacks
@@ -43,12 +43,12 @@
 %% ===================================================================
 %% Exported functions
 %% ===================================================================
--spec exec(tuple(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
+-spec exec(reference(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
 exec(Connection, Sql, MaxRowCount) ->
     exec(Connection, Sql, undefined, MaxRowCount).
 
 -spec exec(tuple(), binary(), tuple(), integer()) -> ok | {ok, pid()} | {error, term()}.
-exec({oci_port, _, _} = Connection, OrigSql, Binds, MaxRowCount) ->
+exec(Connection, OrigSql, Binds, MaxRowCount) ->
     {Sql, NewSql, TableName, RowIdAdded, SelectSections} =
         parse_sql(sqlparse:parsetree(OrigSql), OrigSql),
     case catch run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) of
@@ -268,29 +268,116 @@ expand_star(Flds, _Forms) -> Flds.
 qualify_star([]) -> [];
 qualify_star([Table | Rest]) -> [qualify_field(Table, "*") | qualify_star(Rest)].
 
-bind_exec_stmt(Stmt, undefined) -> Stmt:exec_stmt();
-bind_exec_stmt(Stmt, {BindsMeta, BindVal}) ->
-    case Stmt:bind_vars(BindsMeta) of
-        ok -> Stmt:exec_stmt([list_to_tuple(BindVal)]);
-        Error -> error(Error)
+bind_exec_stmt(Conn, Stmt, undefined) -> dpi:stmt_execute(Stmt);
+bind_exec_stmt(Conn, Stmt, {BindsMeta, BindVal}) ->
+    BindVars = bind_vars(Conn, Stmt, BindsMeta),
+    execute_with_binds(Stmt, BindVars, BindVal),
+    [ dpi:var_release(maps:get(var, B))|| B <- BindVars],
+ok.
+
+oraTypeToInternal(OraType)->
+    case OraType of
+        'SQLT_INT' -> { 'DPI_ORACLE_TYPE_NATIVE_INT', 'DPI_NATIVE_TYPE_INT64' };
+        'SQLT_CHR' -> { 'DPI_ORACLE_TYPE_CHAR', 'DPI_NATIVE_TYPE_BYTES' };
+        'SQLT_FLT' -> { 'DPI_ORACLE_TYPE_NATIVE_DOUBLE', 'DPI_NATIVE_TYPE_DOUBLE' };
+        'SQLT_DAT' -> { 'DPI_ORACLE_TYPE_DATE', 'DPI_NATIVE_TYPE_TIMESTAMP' };
+        Else ->       { error, {"Unknown Type", Else}}
     end.
+
+
+bind_vars(Conn, Stmt, BindsMeta)->
+    
+    [begin
+        {OraNative, DpiNative} = oraTypeToInternal(BindType),
+        Var = dpi:conn_newVar(Conn, OraNative, DpiNative, 100, 4000, false, false, undefined),
+        ok = dpi:stmt_bindByName(Stmt, BindName, Var),
+        {Var, DpiNative}
+    end || {BindName, BindType} <- BindsMeta].
+
+    % BindsMeta is a list like:
+    %[
+    %    {<<":pkey">>, 'SQLT_INT'}
+    %    , {<<":publisher">>, 'SQLT_CHR'}
+    %    , {<<":rank">>, 'SQLT_FLT'}
+    %    , {<<":hero">>, 'SQLT_CHR'}
+    %    , {<<":reality">>, 'SQLT_CHR'}
+    %    , {<<":votes">>, 'SQLT_INT'}
+    %    , {<<":createdate">>, 'SQLT_DAT'}
+    %    , {<<":votes_first_rank">>, 'SQLT_INT'}
+    %]
+
+    % For each of those:
+    %   - Create the dpiData/Var
+    %   - do the bind
+
+
+execute_with_binds(Stmt, BindVars, Binds) ->
+
+    [
+        [
+                case VarType of 
+                    'DPI_NATIVE_TYPE_INT64' ->
+                         dpi:data_setInt64(Data, Bind);
+                    'DPI_NATIVE_TYPE_DOUBLE' ->
+                         dpi:data_setDouble(Data, Bind);
+                    'DPI_NATIVE_TYPE_BYTES' ->
+                         dpi:var_setFromBytes(Var, 0, Bind);
+                        %% TODO: timestamp, etc
+
+                    Else -> {error, {"invalide gobshite", Else}}
+                end
+
+        || {Bind, {#{var := Var, data := Data}, VarType}} <- lists:zip(tuple_to_list(BindTuple), BindVars)
+        ]
+    || BindTuple <- Binds],
+    % Binds is a list like 
+
+	%[
+	%	{1,<<"_publisher_1_">>,1.5,<<"_hero_1_">>,<<"_reality_1_">>, 1, <<120,119,4,10,14,31,48>>, 1},
+	%	{2,<<"_publisher_2_">>,3.0,<<"_hero_2_">>,<<"_reality_2_">>, 2, <<120,119,4,10,14,31,48>>, 2},
+	%	{3,<<"_publisher_3_">>,4.5,<<"_hero_3_">>,<<"_reality_3_">>, 3, <<120,119,4,10,14,31,48>>, 3}
+	%]
+
+    % For each of those:
+    %   - Assign all these values to the data/char
+    %   - execute the statement
+ok.
 
 run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
+    Stmt = dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>),
+
+    try dpi:stmt_execute(Stmt, []) of 
+        Statement -> 
+            StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+                             SelectSections)
+    catch _:_ -> 
+        Statement = dpi:conn_prepareStmt(Connection, false, Sql, <<"">>),
+        try dpi:stmt_execute(Stmt, []) of 
+            Statement ->
+                StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+                             SelectSections)
+        catch _:_ -> 
+            {error, "Fatal Error in run_query."}
+        end
+    end,
+
     case Connection:prep_sql(NewSql) of
         {error, {ErrorId,Msg}} when Sql =/= NewSql ->
             case Connection:prep_sql(Sql) of
                 {error, {ErrorId,Msg}} ->
                     error({ErrorId,Msg});
-                Statement ->
-                    StmtExecResult = bind_exec_stmt(Statement, Binds),
-                    result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,
+                Statement1 ->
+                    StmtExecResult1 = bind_exec_stmt(Connection, Statement1, Binds),
+                    result_exec_stmt(StmtExecResult1,Statement1,Sql,Binds,NewSql,RowIdAdded,
                                      Connection,SelectSections)
             end;
         {error, {ErrorId,Msg}} -> error({ErrorId,Msg});
-        Statement ->
-            StmtExecResult = bind_exec_stmt(Statement, Binds),
-            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+        Statement2 ->
+            StmtExecResult2 = bind_exec_stmt(Connection, Statement2, Binds),
+            result_exec_stmt(StmtExecResult2,Statement2,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
     end.
 
@@ -361,7 +448,7 @@ result_exec_stmt(RowIdError, Statement, Sql, Binds, _NewSql, _RowIdAdded, Connec
         {error, {ErrorId,Msg}} ->
             error({ErrorId,Msg});
         Statement1 ->
-            case bind_exec_stmt(Statement1, Binds) of
+            case bind_exec_stmt(Connection, Statement1, Binds) of
                 {cols, Clms} ->
                     Fields = proplists:get_value(fields, SelectSections, []),
                     NewClms = cols_to_rec(Clms, Fields),
@@ -702,16 +789,12 @@ run_table_cmd({oci_port, _, _} = Connection, truncate_table, TableName) ->
 run_table_cmd({oci_port, _, _} = Connection, drop_table, TableName) ->
     run_table_cmd(Connection, iolist_to_binary([<<"drop table ">>, TableName])).
 
--spec run_table_cmd(tuple(), binary()) -> ok | {error, term()}.
+-spec run_table_cmd(reference(), binary()) -> ok | {error, term()}.
 run_table_cmd(Connection, SqlCmd) ->
-    Statement = Connection:prep_sql(SqlCmd),
-    case Statement:exec_stmt() of
-        {executed, _} ->
-            Statement:close(),
-            ok;
-        Error ->
-            {error, Error}
-    end.
+    Stmt = dpi:conn_prepareStmt(Connection, false, SqlCmd, <<"">>),
+    dpi:stmt_execute(Stmt, []),
+    dpi:stmt_release(Stmt),
+    ok.
 
 -spec find_original_field(binary(), list()) -> {binary(), boolean(), list()}.
 find_original_field(Alias, []) -> {Alias, false, []};
