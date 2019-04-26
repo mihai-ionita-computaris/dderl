@@ -51,7 +51,7 @@ exec(Connection, Sql, MaxRowCount) ->
 exec(Connection, OrigSql, Binds, MaxRowCount) ->
     {Sql, NewSql, TableName, RowIdAdded, SelectSections} =
         parse_sql(sqlparse:parsetree(OrigSql), OrigSql),
-        io:format("run_query with args Connection: ~p Sql: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p, SelectSections: ~p~n",[Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
+        %io:format("run_query with args Connection: ~p Sql: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p, SelectSections: ~p~n",[Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
     case catch run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) of
         {'EXIT', {{error, Error}, ST}} ->
             ?Error("run_query([Sql: ~p],[Binds: ~p],[NewSql: ~p])~n{[Error: ~p],[ST: ~p]}", [Sql, Binds, NewSql, Error, ST]),
@@ -273,7 +273,9 @@ bind_exec_stmt(_Conn, Stmt, undefined) ->
     io:format("bind exec pass undefined ~p~n",[0]),
     Cols = dpi:stmt_execute(Stmt, []),
     io:format("bind exec pass undefined ~p~n",[1]), 
-    {cols,Cols};
+    {cols,Cols},        %% the real value
+    {cols,[{<<"123">>,'SQLT_NUM',22,0,-127},        %% hardcoded
+               {<<"ROWID">>,'SQLT_RDD',8,0,0}]};
 
 bind_exec_stmt(Conn, Stmt, {BindsMeta, BindVal}) ->
     io:format("bind exec pass ~p~n",[0]),
@@ -357,7 +359,7 @@ execute_with_binds(Stmt, BindVars, Binds) ->
 
 run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
-io:format("RUN QUERY: Connection: ~p SQL: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p SelectSections: ~p end~n", [Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
+%io:format("RUN QUERY: Connection: ~p SQL: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p SelectSections: ~p end~n", [Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
     dpi:load(),
     io:format("Pass ~p~n",[1]),
     try dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>) of 
@@ -380,23 +382,6 @@ io:format("RUN QUERY: Connection: ~p SQL: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p
             io:format("PH NO ~p~n",[1]),
             {error, "Fatal Error in run_query."}
         end
-    end,
-
-    case Connection:prep_sql(NewSql) of
-        {error, {ErrorId,Msg}} when Sql =/= NewSql ->
-            case Connection:prep_sql(Sql) of
-                {error, {ErrorId,Msg}} ->
-                    error({ErrorId,Msg});
-                Statement1 ->
-                    StmtExecResult1 = bind_exec_stmt(Connection, Statement1, Binds),
-                    result_exec_stmt(StmtExecResult1,Statement1,Sql,Binds,NewSql,RowIdAdded,
-                                     Connection,SelectSections)
-            end;
-        {error, {ErrorId,Msg}} -> error({ErrorId,Msg});
-        Statement2 ->
-            StmtExecResult2 = bind_exec_stmt(Connection, Statement2, Binds),
-            result_exec_stmt(StmtExecResult2,Statement2,Sql,Binds,NewSql,RowIdAdded,Connection,
-                             SelectSections)
     end.
 
 result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Connection, SelectSections) ->
