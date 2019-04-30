@@ -370,16 +370,16 @@ run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
             result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections),
             io:format("Pass ~p~n",[4])
-    catch _:_ -> 
-        io:format("Oh no! ~p~n",[12121]),
+    catch Class:Error -> 
+        io:format("Oh no! ~p ~p ~p~n",[12121, Class, Error]),
         try dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of 
             Statement ->
                 io:format("Pass ~p~n",[-1]),
                 StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
             result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
-        catch _:_ -> 
-            io:format("PH NO ~p~n",[1]),
+        catch Class2:Error2 -> 
+            io:format("PH NO ~p ~p ~p~n",[1, Class2, Error2]),
             {error, "Fatal Error in run_query."}
         end
     end.

@@ -171,6 +171,9 @@ handle_info(invalid_credentials, #state{sess = OldSess} = State) ->
 handle_info({'EXIT', _Pid, normal}, #state{user = _User} = State) ->
     %?Debug("Received normal exit from ~p for ~p", [Pid, User]),
     {noreply, State};
+handle_info({'EXIT', Pid, _}, #state{user = User} = State) ->
+    ?Debug("Received ABnormal exit from ~p for ~p", [Pid, User]),
+    {noreply, State};
 handle_info({set_id, SessionToken}, State) ->
     {noreply, State#state{id = SessionToken}};
 handle_info({download_done, Id}, #state{downloads = Downloads} = State) ->
@@ -237,7 +240,7 @@ process_call({[<<"login">>], ReqData}, _Adapter, From, {SrcIp, _Port}, State) ->
     login(ReqData, From, SrcIp, State);
 process_call({[<<"ping">>], _ReqData}, _Adapter, From, {SrcIp,_},
              #state{lock_state = LockState} = State) ->
-                 io:format("Processing call ~p~n",[ping]),
+                 %io:format("Processing call ~p~n",[ping]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "ping"}, State),
     if LockState == unlocked ->
             reply(From, #{<<"ping">> => node()}, self()),
@@ -661,17 +664,17 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_}, #state{sess = Sess, user_
     State.
 
 spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, SelfPid) ->
-    try
-       io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid) with args ~p", [{{Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid}]),
+    %try
+        io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess , UserId, From, CurrentPriv, SelfPid) with args ~p ~p ~p ~p ~p ~p ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         io:format("cmd: ~p BodyJson: ~p Sess: ~p UserId: ~p Form: ~p CurrentPriv: ~p SelfPid: ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
         io:format("Pass number 1 ~p~n",[qwerttzuioplkj]),
-        SelfPid ! rearm_session_idle_timer
-    catch Class:Error ->
-            ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
-                   [Class, Error, BodyJson, erlang:get_stacktrace()]),
-            reply(From, [{<<"error">>, <<"Unable to process the request">>}], SelfPid)
-    end.
+        SelfPid ! rearm_session_idle_timer.
+    %catch Class:Error ->
+    %        ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
+    %               [Class, Error, BodyJson, erlang:get_stacktrace()]),
+    %        reply(From, [{<<"error">>, <<"Unable to process the request">>}], SelfPid)
+   % end.
 
 spawn_gen_process_call(Adapter, From, C, BodyJson, Sess, UserId, SelfPid) ->
     try

@@ -250,8 +250,10 @@ gui_req(button, <<"tail">>, ReplyTo, {?MODULE,Pid}) ->
     ?NoDbLog(debug, [], "button ~p", [<<"tail">>]),
     gen_statem:cast(Pid,{button, <<"tail">>, ReplyTo});
 gui_req(CommandStr, Parameter, ReplyTo, {?MODULE,Pid}) when is_atom(CommandStr) ->
+    io:format(user, "FSM gui_req call with CommandStr ~p Parameter ~p ReplyTo ~p ~n",[CommandStr, Parameter, ReplyTo]),
     ?NoDbLog(debug, [], "~p ~p", [CommandStr,Parameter]),
-    gen_statem:cast(Pid,{CommandStr, Parameter, ReplyTo}).
+    gen_statem:cast(Pid,{CommandStr, Parameter, ReplyTo});
+gui_req(A, B, C, D) -> io:format(user, "ERROR! gui_req unknown params of ~p, ~p, ~p and ~p~n",[A, B, C, D]), ok.
 
 -spec close({atom(), pid()}) -> ok.
 close({?MODULE, Pid}) ->
