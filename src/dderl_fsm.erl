@@ -271,7 +271,10 @@ get_count({?MODULE, Pid}) ->
 %% the return tuple type #stmtcol{}. but is not imported
 -spec get_columns({atom(), pid()}) -> [tuple()].
 get_columns({?MODULE, Pid}) ->
-    gen_statem:call(Pid,{"get_columns"}).
+    io:format("get columns. Pid ~p Self ~p ~n",[Pid, self()]),
+    Res = gen_statem:call(Pid,{"get_columns"}),
+    io:format("get columns done ~p ~n",[ay]),
+    Res.
 
 -spec get_query({atom(), pid()}) -> binary().
 get_query({?MODULE, Pid}) ->
@@ -1423,8 +1426,12 @@ callback_mode() ->
 %%          {stop, Reason, NewStateData, Reply}
 %% --------------------------------------------------------------------
 handle_call({"get_columns"}, From, SN, #state{ctx=#ctx{stmtCols=Columns}}=State) ->
+    io:format(user, "PID ~p handling get_columns pre ~p~n",[self(), 0]),
+    io:format(user, "PID ~p handling get_columns call. From: ~p SN: ~p Columns: ~p~n",[self(), From, SN, Columns]),
     ?NoDbLog(debug, [], "get_columns ~p", [Columns]),
-    {next_state, SN, State, [{reply, From, Columns}]};
+    Ret = {next_state, SN, State, [{reply, From, Columns}]},
+    io:format(user, "PID ~p handling get_columns Ret ~p~n",[self(), Ret]),
+    Ret;
 handle_call(get_count, From, SN, #state{bufCnt = Count} = State) ->
     ?NoDbLog(debug, [], "get_count ~p", [Count]),
     {next_state, SN, State, [{reply, From, Count}]};

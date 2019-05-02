@@ -578,7 +578,7 @@ process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
                 {error, _} -> io:format("Button Pass: ~p~n", [14]), Button = ButtonBin;
                 {Target, []} -> io:format("Button Pass: ~p~n", [15]), Button = Target
             end,
-            io:format("Button Pass: ~p FsmStmt ~p From ~p gui_resp_cb_fun ~p  ~n",[16, FsmStmt, From, gui_resp_cb_fun(<<"button">>, FsmStmt, From)]),
+            io:format("Button Pass: ~p Button ~p FsmStmt ~p From ~p ~n",[16, Button, FsmStmt, From]),
             Res = FsmStmt:gui_req(button, Button, gui_resp_cb_fun(<<"button">>, FsmStmt, From)),
             io:format("Button Pass: ~p~n", [17]),
             Res
@@ -701,9 +701,10 @@ disconnect(#priv{connections = Connections} = Priv) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -spec gui_resp_cb_fun(binary(), {atom(), pid()}, pid()) -> fun().
 gui_resp_cb_fun(Cmd, Statement, From) ->
-    io:format("gui_resp_cb_fun pass ~p ~n",[0]),
+    io:format("gui_resp_cb_fun pass ~p Cmd ~p Stmt ~p From ~p ~n",[0, Cmd, Statement, From]),
     Clms = Statement:get_columns(),
-    io:format("gui_resp_cb_fun pass ~p ~n",[1]),
+    %Clms = [{stmtCol,<<"12345">>,<<"12345">>,'SQLT_NUM',38,dynamic,false}],
+    io:format("gui_resp_cb_fun pass ~p Clms ~p ~n",[1, Clms]),
     Ret = gen_adapter:build_resp_fun(Cmd, Clms, From),
     io:format("gui_resp_cb_fun pass ~p ~n",[2]),
     Ret.
@@ -773,9 +774,9 @@ process_query(ok, Query, BindVals, Connection, SessPid) ->
     io:format("Process Query: ~p Query: ~p BindVals: ~p Connection: ~p SessPid: ~p ~n",[2, Query, BindVals, Connection, SessPid]),
     ?Debug([{session, Connection}], "query ~p -> ok", [Query]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
-    % [{<<"result">>, <<"ok">>}]; 5% real
-    {cols,[{<<"123">>,'SQLT_NUM',22,0,-127},
-               {<<"ROWID">>,'SQLT_RDD',8,0,0}]};    %% hardcoded
+    [{<<"result">>, <<"ok">>}];
+    %{cols,[{<<"123">>,'SQLT_NUM',22,0,-127},
+    %           {<<"ROWID">>,'SQLT_RDD',8,0,0}]};    %% hardcoded
 process_query({ok, #stmtResult{sortSpec = SortSpec, stmtCols = Clms} = StmtRslt, TableName},
               Query, BindVals, {oci_port, _, _} = Connection, SessPid) ->
                   io:format("Process Query: ~p~n",[3]),
