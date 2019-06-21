@@ -1,24 +1,24 @@
--module(dderloci).
+-module(dderlodpi).
 -behaviour(gen_server).
 
 -include("dderloci.hrl").
 
 %% API
 -export([
-    exec/3,
-    exec/4,
-    change_password/4,
-    add_fsm/2,
-    fetch_recs_async/3,
-    fetch_close/1,
-    filter_and_sort/6,
-    close/1,
-    close_port/1,
-    run_table_cmd/3,
-    cols_to_rec/2,
-    get_alias/1,
-    fix_row_format/4,
-    create_rowfun/3
+    exec/3,                 %   ✓
+    exec/4,                 %   ✓
+    change_password/4,      %   ✓
+    add_fsm/2,              %
+    fetch_recs_async/3,     %
+    fetch_close/1,          %
+    filter_and_sort/6,      %
+    close/1,                %
+    close_port/1,           %
+    run_table_cmd/3,        %   ✓
+    cols_to_rec/2,          %
+    get_alias/1,            %
+    fix_row_format/4,       %
+    create_rowfun/3         %
 ]).
 
 %% gen_server callbacks
@@ -43,20 +43,21 @@
 %% ===================================================================
 %% Exported functions
 %% ===================================================================
--spec exec(tuple(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
+-spec exec(reference(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
 exec(Connection, Sql, MaxRowCount) ->
     exec(Connection, Sql, undefined, MaxRowCount).
 
 -spec exec(tuple(), binary(), tuple(), integer()) -> ok | {ok, pid()} | {error, term()}.
-exec({oci_port, _, _} = Connection, OrigSql, Binds, MaxRowCount) ->
+exec(Connection, OrigSql, Binds, MaxRowCount) ->
     {Sql, NewSql, TableName, RowIdAdded, SelectSections} =
         parse_sql(sqlparse:parsetree(OrigSql), OrigSql),
+        %io:format("run_query with args Connection: ~p Sql: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p, SelectSections: ~p~n",[Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
     case catch run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) of
         {'EXIT', {{error, Error}, ST}} ->
-            ?Error("run_query(~s,~p,~s)~n{~p,~p}", [Sql, Binds, NewSql, Error, ST]),
+            ?Error("run_query([Sql: ~p],[Binds: ~p],[NewSql: ~p])~n{[Error: ~p],[ST: ~p]}", [Sql, Binds, NewSql, Error, ST]),
             {error, Error};
         {'EXIT', {Error, ST}} ->
-            ?Error("run_query(~s,~p,~s)~n{~p,~p}", [Sql, Binds, NewSql, Error, ST]),
+            ?Error("run_query([Sql: ~p],[Binds: ~p],[NewSql: ~p])~n{[Error: ~p],[ST: ~p]}", [Sql, Binds, NewSql, Error, ST]),
             {error, Error};
         {ok, #stmtResult{} = StmtResult, ContainRowId} ->
             LowerSql = string:to_lower(binary_to_list(Sql)),
@@ -268,33 +269,125 @@ expand_star(Flds, _Forms) -> Flds.
 qualify_star([]) -> [];
 qualify_star([Table | Rest]) -> [qualify_field(Table, "*") | qualify_star(Rest)].
 
-bind_exec_stmt(Stmt, undefined) -> Stmt:exec_stmt();
-bind_exec_stmt(Stmt, {BindsMeta, BindVal}) ->
-    case Stmt:bind_vars(BindsMeta) of
-        ok -> Stmt:exec_stmt([list_to_tuple(BindVal)]);
-        Error -> error(Error)
+bind_exec_stmt(_Conn, Stmt, undefined) ->
+    io:format("bind exec pass undefined ~p~n",[0]),
+    Cols = dpi:stmt_execute(Stmt, []),
+    io:format("bind exec pass undefined ~p~n",[1]), 
+    {cols,Cols},        %% the real value
+    {cols,[{<<"123">>,'SQLT_NUM',22,0,-127},        %% hardcoded
+               {<<"ROWID">>,'SQLT_RDD',8,0,0}]};
+
+bind_exec_stmt(Conn, Stmt, {BindsMeta, BindVal}) ->
+    io:format("bind exec pass ~p~n",[0]),
+    BindVars = bind_vars(Conn, Stmt, BindsMeta),
+    io:format("bind exec pass ~p~n",[1]),
+    execute_with_binds(Stmt, BindVars, BindVal),
+    io:format("bind exec pass ~p~n",[2]),
+    [ dpi:var_release(maps:get(var, B))|| B <- BindVars],
+    io:format("bind exec pass ~p~n",[3]),
+ok.
+
+oraTypeToInternal(OraType)->
+    case OraType of
+        'SQLT_INT' -> { 'DPI_ORACLE_TYPE_NATIVE_INT', 'DPI_NATIVE_TYPE_INT64' };
+        'SQLT_CHR' -> { 'DPI_ORACLE_TYPE_CHAR', 'DPI_NATIVE_TYPE_BYTES' };
+        'SQLT_FLT' -> { 'DPI_ORACLE_TYPE_NATIVE_DOUBLE', 'DPI_NATIVE_TYPE_DOUBLE' };
+        'SQLT_DAT' -> { 'DPI_ORACLE_TYPE_DATE', 'DPI_NATIVE_TYPE_TIMESTAMP' };
+        Else ->       { error, {"Unknown Type", Else}}
     end.
+
+
+bind_vars(Conn, Stmt, BindsMeta)->
+    
+    [begin
+        {OraNative, DpiNative} = oraTypeToInternal(BindType),
+        Var = dpi:conn_newVar(Conn, OraNative, DpiNative, 100, 4000, false, false, undefined),
+        ok = dpi:stmt_bindByName(Stmt, BindName, Var),
+        {Var, DpiNative}
+    end || {BindName, BindType} <- BindsMeta].
+
+    % BindsMeta is a list like:
+    %[
+    %    {<<":pkey">>, 'SQLT_INT'}
+    %    , {<<":publisher">>, 'SQLT_CHR'}
+    %    , {<<":rank">>, 'SQLT_FLT'}
+    %    , {<<":hero">>, 'SQLT_CHR'}
+    %    , {<<":reality">>, 'SQLT_CHR'}
+    %    , {<<":votes">>, 'SQLT_INT'}
+    %    , {<<":createdate">>, 'SQLT_DAT'}
+    %    , {<<":votes_first_rank">>, 'SQLT_INT'}
+    %]
+
+    % For each of those:
+    %   - Create the dpiData/Var
+    %   - do the bind
+
+
+execute_with_binds(Stmt, BindVars, Binds) ->
+
+    [
+        [
+                case VarType of 
+                    'DPI_NATIVE_TYPE_INT64' ->
+                         dpi:data_setInt64(Data, Bind);
+                    'DPI_NATIVE_TYPE_DOUBLE' ->
+                         dpi:data_setDouble(Data, Bind);
+                    'DPI_NATIVE_TYPE_BYTES' ->
+                         dpi:var_setFromBytes(Var, 0, Bind);
+                        %% TODO: timestamp, etc
+
+                    Else -> {error, {"invalide gobshite", Else}}
+                end
+
+        || {Bind, {#{var := Var, data := Data}, VarType}} <- lists:zip(tuple_to_list(BindTuple), BindVars)
+        ]
+    || BindTuple <- Binds],
+
+    Cols = dpi:stmt_execute(Stmt, []),
+    {cols,Cols}.
+    % Binds is a list like 
+
+	%[
+	%	{1,<<"_publisher_1_">>,1.5,<<"_hero_1_">>,<<"_reality_1_">>, 1, <<120,119,4,10,14,31,48>>, 1},
+	%	{2,<<"_publisher_2_">>,3.0,<<"_hero_2_">>,<<"_reality_2_">>, 2, <<120,119,4,10,14,31,48>>, 2},
+	%	{3,<<"_publisher_3_">>,4.5,<<"_hero_3_">>,<<"_reality_3_">>, 3, <<120,119,4,10,14,31,48>>, 3}
+	%]
+
+    % For each of those:
+    %   - Assign all these values to the data/char
+    %   - execute the statement
 
 run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
-    case Connection:prep_sql(NewSql) of
-        {error, {ErrorId,Msg}} when Sql =/= NewSql ->
-            case Connection:prep_sql(Sql) of
-                {error, {ErrorId,Msg}} ->
-                    error({ErrorId,Msg});
-                Statement ->
-                    StmtExecResult = bind_exec_stmt(Statement, Binds),
-                    result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,
-                                     Connection,SelectSections)
-            end;
-        {error, {ErrorId,Msg}} -> error({ErrorId,Msg});
-        Statement ->
-            StmtExecResult = bind_exec_stmt(Statement, Binds),
+%io:format("RUN QUERY: Connection: ~p SQL: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p SelectSections: ~p end~n", [Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
+    dpi:load(),
+    io:format("Pass ~p~n",[1]),
+    try dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>) of 
+        Statement -> 
+            io:format("Pass ~p Connection ~p Statement ~p Binds ~p~n",[2, Connection, Statement, Binds]),
+            StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+            io:format("Pass ~p~n",[3]),
+            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+                             SelectSections),
+            io:format("Pass ~p~n",[4])
+    catch Class:Error -> 
+        io:format("Oh no! ~p ~p ~p~n",[12121, Class, Error]),
+        try dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of 
+            Statement ->
+                io:format("Pass ~p~n",[-1]),
+                StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
             result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
+        catch Class2:Error2 -> 
+            io:format("PH NO ~p ~p ~p~n",[1, Class2, Error2]),
+            {error, "Fatal Error in run_query."}
+        end
     end.
 
 result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Connection, SelectSections) ->
+    io:format("result_exec_stmt v~p~n",[1]),
+    io:format("RowIdAdded: ~p~n",[RowIdAdded]),
+    io:format("Clms: ~p~n",[Clms]),
     if
         RowIdAdded -> % ROWID is hidden from columns
             [_|ColumnsR] = lists:reverse(Clms),
@@ -322,13 +415,16 @@ result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Con
                     , sortSpec = []}
      , RowIdAdded};
 result_exec_stmt({rowids, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
-    Statement:close(),
+    io:format("result_exec_stmt v~p~n",[2]),
+    dpi:stmt_release(Statement),
     ok;
 result_exec_stmt({executed, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
-    Statement:close(),
+    io:format("result_exec_stmt v~p~n",[3]),
+    dpi:stmt_release(Statement),
     ok;
-result_exec_stmt({executed, 1, [{Var, Val}]}, Stmt, Sql, {Binds, _}, NewSql, false, Conn, _SelectSections) ->
-    Stmt:close(),
+result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql, false, Conn, _SelectSections) ->
+    io:format("result_exec_stmt v~p~n",[4]),
+    dpi:stmt_release(Statement),
     case lists:keyfind(Var, 1, Binds) of
         {Var,out,'SQLT_RSET'} ->
             result_exec_stmt(Val:exec_stmt(), Val, Sql, undefined, NewSql, false, Conn, []);
@@ -338,6 +434,7 @@ result_exec_stmt({executed, 1, [{Var, Val}]}, Stmt, Sql, {Binds, _}, NewSql, fal
             {ok, [{Var, Val}]}
     end;
 result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
+    io:format("result_exec_stmt v~p~n",[5]),
     NewValues =
     lists:foldl(
       fun({Var, Val}, Acc) ->
@@ -349,30 +446,39 @@ result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _Ne
       end, [], Values),
     ?Debug("Values ~p", [Values]),
     ?Debug("Binds ~p", [Binds]),
-    Statement:close(),
+    dpi:stmt_release(Statement),
     {ok, NewValues};
 result_exec_stmt(Error, Statement, Sql, _Binds, Sql, _RowIdAdded, _Connection, _SelectSections) ->
-    Statement:close(),
+    io:format("result_exec_stmt v~p~n",[6]),
+    dpi:stmt_release(Statement),
     error(Error);
 result_exec_stmt(RowIdError, Statement, Sql, Binds, _NewSql, _RowIdAdded, Connection, SelectSections) ->
+    io:format("result_exec_stmt v~p~n",[7]),
     ?Debug("RowIdError ~p", [RowIdError]),
-    Statement:close(),
-    case Connection:prep_sql(Sql) of
+    dpi:stmt_release(Statement),
+    io:format("Conn args: [~p] [~p] [~p] [~p] conna args end~n", [Connection, false, Sql, <<"">>]),
+    case dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of
         {error, {ErrorId,Msg}} ->
             error({ErrorId,Msg});
         Statement1 ->
-            case bind_exec_stmt(Statement1, Binds) of
+            io:format("res pass ~p~n", [1]),
+            Bind_exec_res = bind_exec_stmt(Connection, Statement1, Binds),
+             io:format("Bind exec res: ~p~n", [Bind_exec_res]),
+            case Bind_exec_res of
                 {cols, Clms} ->
                     Fields = proplists:get_value(fields, SelectSections, []),
+                    io:format("res pass ~p~n", [2]),
                     NewClms = cols_to_rec(Clms, Fields),
+                    io:format("res pass ~p~n", [3]),
                     SortFun = build_sort_fun(Sql, NewClms),
+                    io:format("res pass ~p~n", [4]),
                     {ok, #stmtResult{ stmtCols = NewClms, stmtRef  = Statement1, sortFun  = SortFun,
                                       rowFun   = fun({{}, Row}) ->
                                                          translate_datatype(Statement, tuple_to_list(Row), NewClms)
                                                  end, sortSpec = []}
                      , false};
                 Error ->
-                    Statement1:close(),
+                    dpi:stmt_release(Statement),
                     error(Error)
             end
     end.
@@ -702,16 +808,12 @@ run_table_cmd({oci_port, _, _} = Connection, truncate_table, TableName) ->
 run_table_cmd({oci_port, _, _} = Connection, drop_table, TableName) ->
     run_table_cmd(Connection, iolist_to_binary([<<"drop table ">>, TableName])).
 
--spec run_table_cmd(tuple(), binary()) -> ok | {error, term()}.
+-spec run_table_cmd(reference(), binary()) -> ok | {error, term()}.
 run_table_cmd(Connection, SqlCmd) ->
-    Statement = Connection:prep_sql(SqlCmd),
-    case Statement:exec_stmt() of
-        {executed, _} ->
-            Statement:close(),
-            ok;
-        Error ->
-            {error, Error}
-    end.
+    Stmt = dpi:conn_prepareStmt(Connection, false, SqlCmd, <<"">>),
+    dpi:stmt_execute(Stmt, []),
+    dpi:stmt_release(Stmt),
+    ok.
 
 -spec find_original_field(binary(), list()) -> {binary(), boolean(), list()}.
 find_original_field(Alias, []) -> {Alias, false, []};

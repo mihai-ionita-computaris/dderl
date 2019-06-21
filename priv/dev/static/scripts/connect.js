@@ -161,7 +161,7 @@ export function connect_dlg()
     .on('adapter_change', function() {
         console.log("empty the owners_list");
         owners_list.empty();
-        owners_list.change();        
+        owners_list.change();
     })
     .change(function() {
         if(owners_list.children().length < 1) {
@@ -192,7 +192,7 @@ export function connect_dlg()
     connection_list
     .on('owner_change', function() {
         connection_list.empty();
-        connection_list.change();        
+        connection_list.change();
     })
     .change(function() {
         if(connection_list.children().length < 1) {
@@ -257,7 +257,7 @@ export function connect_dlg()
             }
         }
 
-        adapter_list.empty();        
+        adapter_list.empty();
         adapter_list.change();
 
     });
@@ -269,8 +269,7 @@ function login_save(dlg, connection_list, adapter_list, owners_list) {
         dderlState.connecting = true;
         var conn = connection_list.find("option:selected").data('connect');
         var conn_name = connection_list.parent().find('input').val();
-        if(conn.name != conn_name)
-            conn.id = null;
+        if(conn.name != conn_name) { conn.id = null; }
         conn.name    = conn_name;
         conn.adapter = adapter_list.val();
         conn.owner   = owners_list.parent().find('input').val();
@@ -288,9 +287,10 @@ function login_save(dlg, connection_list, adapter_list, owners_list) {
                 conn.secure = $('#secure').is(':checked');
             }
             // imem (tcp) expects passwords are md5
-            if (conn.hasOwnProperty('password'))
+            if (conn.hasOwnProperty('password')) {
                 conn.password = md5Arr(conn.password);
-        } else if(conn.adapter == 'oci') {
+            }
+        } else if(conn.adapter == 'oci' || conn.adapter == 'odpi') {
             // 'service', 'sid' and 'tns' input fields are
             // prefixed with inp_ to resolve conflict with
             // method radios
@@ -309,8 +309,8 @@ function login_save(dlg, connection_list, adapter_list, owners_list) {
                 conn.user = $('#user').val();
                 conn.password = $('#password').val();
             }
-            if($('#language').length > 0) conn.language = $('#language').val();
-            if($('#territory').length > 0) conn.territory = $('#territory').val();
+            if($('#language').length > 0) { conn.language = $('#language').val(); }
+            if($('#territory').length > 0) { conn.territory = $('#territory').val(); }
         }
 
         dderlState.adapter = conn.adapter;
@@ -379,16 +379,19 @@ function login_save(dlg, connection_list, adapter_list, owners_list) {
 function load_connect_option(connection_list, connect_options) {
     var connect = connection_list.find("option:selected").data('connect');
     connect_options.empty();
-    if(connect.adapter == "imem") {
+    if(connect.adapter === "imem") {
         add_imem_options(connection_list, connect_options, connect);
-    } else if (connect.adapter == "oci") {
+    } else if (connect.adapter === "oci") {
+        add_oci_options(connection_list, connect_options, connect);
+    } else if (connect.adapter === "odpi") {
+        // TODO: Probably charset has to be separated.
         add_oci_options(connection_list, connect_options, connect);
     }
     connect_options.find("input:text,input:password,textarea")
         .addClass("text ui-widget-content ui-corner-all");
 
     var emptyInputs = connect_options.find('input:text[value=""],input:password[value=""]');
-    if (emptyInputs.length > 0) emptyInputs[0].focus();
+    if (emptyInputs.length > 0) { emptyInputs[0].focus(); }
 }
 
 function add_methods(connection_list, connect_options, keyVals, defaultSelectedId, fn) {

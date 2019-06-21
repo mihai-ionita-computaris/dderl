@@ -440,6 +440,14 @@ process_call({[<<"connect_info">>], _ReqData}, _Adapter, From, {SrcIp,_},
                                             owner => User,
                                             method => <<"tcp">>}];
                                    _ -> []
+                               end ++
+                               case [A || #{adapter := A} <- Connections, A == <<"odpi">>] of
+                                   [] -> [#{adapter => <<"odpi">>,
+                                            id => null,
+                                            name => <<"template oracle dpi">>,
+                                            owner => User,
+                                            method => <<"tns">>}];
+                                   _ -> []
                                end
                               }
                        }
@@ -664,17 +672,17 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_}, #state{sess = Sess, user_
     State.
 
 spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, SelfPid) ->
-    %try
+    try
         io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess , UserId, From, CurrentPriv, SelfPid) with args ~p ~p ~p ~p ~p ~p ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         io:format("cmd: ~p BodyJson: ~p Sess: ~p UserId: ~p Form: ~p CurrentPriv: ~p SelfPid: ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
         io:format("Pass number 1 ~p~n",[qwerttzuioplkj]),
-        SelfPid ! rearm_session_idle_timer.
-    %catch Class:Error ->
-    %        ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
-    %               [Class, Error, BodyJson, erlang:get_stacktrace()]),
-    %        reply(From, [{<<"error">>, <<"Unable to process the request">>}], SelfPid)
-   % end.
+        SelfPid ! rearm_session_idle_timer
+    catch Class:Error ->
+            ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
+                   [Class, Error, BodyJson, erlang:get_stacktrace()]),
+            reply(From, [{<<"error">>, <<"Unable to process the request">>}], SelfPid)
+    end.
 
 spawn_gen_process_call(Adapter, From, C, BodyJson, Sess, UserId, SelfPid) ->
     try
