@@ -1,7 +1,7 @@
 -module(dderlodpi).
 -behaviour(gen_server).
 
--include("dderloci.hrl").
+-include("dderlodpi.hrl").
 
 %% API
 -export([
@@ -23,11 +23,11 @@
 
 %% gen_server callbacks
 -export([init/1,
-	handle_call/3,
-	handle_cast/2,
-	handle_info/2,
-	terminate/2,
-	code_change/3]).
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3]).
 
 -record(qry, {select_sections
              ,contain_rowid
@@ -192,13 +192,13 @@ handle_cast(_Ignored, State) ->
     {noreply, State}.
 
 handle_info(_Info, State) ->
-	{noreply, State}.
+    {noreply, State}.
 
 terminate(_Reason, #qry{stmt_result = #stmtResult{stmtRef = undefined}}) -> ok;
 terminate(_Reason, #qry{stmt_result = #stmtResult{stmtRef = StmtRef}}) -> StmtRef:close().
 
 code_change(_OldVsn, State, _Extra) ->
-	{ok, State}.
+    {ok, State}.
 
 %% Internal functions %%%
 -spec select_type(list()) -> atom().
@@ -347,11 +347,11 @@ execute_with_binds(Stmt, BindVars, Binds) ->
     {cols,Cols}.
     % Binds is a list like 
 
-	%[
-	%	{1,<<"_publisher_1_">>,1.5,<<"_hero_1_">>,<<"_reality_1_">>, 1, <<120,119,4,10,14,31,48>>, 1},
-	%	{2,<<"_publisher_2_">>,3.0,<<"_hero_2_">>,<<"_reality_2_">>, 2, <<120,119,4,10,14,31,48>>, 2},
-	%	{3,<<"_publisher_3_">>,4.5,<<"_hero_3_">>,<<"_reality_3_">>, 3, <<120,119,4,10,14,31,48>>, 3}
-	%]
+    %[
+    %   {1,<<"_publisher_1_">>,1.5,<<"_hero_1_">>,<<"_reality_1_">>, 1, <<120,119,4,10,14,31,48>>, 1},
+    %   {2,<<"_publisher_2_">>,3.0,<<"_hero_2_">>,<<"_reality_2_">>, 2, <<120,119,4,10,14,31,48>>, 2},
+    %   {3,<<"_publisher_3_">>,4.5,<<"_hero_3_">>,<<"_reality_3_">>, 3, <<120,119,4,10,14,31,48>>, 3}
+    %]
 
     % For each of those:
     %   - Assign all these values to the data/char

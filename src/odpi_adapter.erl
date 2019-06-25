@@ -1,6 +1,6 @@
 -module(odpi_adapter).
 
--include("dderl.hrl").
+-include("dderlodpi.hrl").
 -include("gres.hrl").
 
 -include_lib("imem/include/imem_sql.hrl").
@@ -55,8 +55,6 @@ add_conn_extra(#ddConn{access = Access}, Conn)
        	maps:merge(Conn, maps:remove(owner,maps:remove(<<"owner">>,Access)));
 add_conn_extra(#ddConn{access = Access}, Conn0) when is_list(Access), is_map(Conn0) ->
     Conn = Conn0#{user => proplists:get_value(user, Access, <<>>),
-                  language => proplists:get_value(languange, Access, proplists:get_value(language, Access, <<>>)),
-                  territory => proplists:get_value(territory, Access, <<>>),
                   charset => proplists:get_value(charset, Access, <<>>),
                   tns => proplists:get_value(tnsstr, Access, <<>>),
                   service => proplists:get_value(service, Access, <<>>),
@@ -97,57 +95,64 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
     Method    = proplists:get_value(<<"method">>, BodyJson, <<"service">>),
     User      = proplists:get_value(<<"user">>, BodyJson, <<>>),
     Defaults  = ?NLSLANG,
-    Language  = get_value_empty_default(<<"languange">>, BodyJson, Defaults),
-    Territory = get_value_empty_default(<<"territory">>, BodyJson, Defaults),
-    Charset   = get_value_empty_default(<<"charset">>, BodyJson, Defaults),
-    NLS_LANG  = binary_to_list(<<Language/binary, $_, Territory/binary, $., Charset/binary>>),
+    % TODO: Lang and territory not supported yet by odpi
+    % Language  = get_value_empty_default(<<"languange">>, BodyJson, Defaults),
+    % Territory = get_value_empty_default(<<"territory">>, BodyJson, Defaults),
+    Charset = binary_to_list(get_value_empty_default(<<"charset">>, BodyJson, Defaults)),
 
-    TNS
-    = case Method of
-          <<"tns">> ->
-              Tns = proplists:get_value(<<"tns">>, BodyJson, <<>>),
-              ?Info("user ~p, TNS ~p", [User, Tns]),
-              Tns;
-          ServiceOrSid when ServiceOrSid == <<"service">>; ServiceOrSid == <<"sid">> ->
-              IpAddr   = proplists:get_value(<<"host">>, BodyJson, <<>>),
-              Port     = binary_to_integer(proplists:get_value(<<"port">>, BodyJson, <<>>)),
-              NewTnsstr
-              = list_to_binary(
-                  io_lib:format(
-                    "(DESCRIPTION="
-                    "  (ADDRESS_LIST="
-                    "      (ADDRESS=(PROTOCOL=tcp)"
-                    "          (HOST=~s)"
-                    "          (PORT=~p)"
-                    "      )"
-                    "  )"
-                    "  (CONNECT_DATA=("++
+    TNS = case Method of
+        <<"tns">> ->
+            Tns = proplists:get_value(<<"tns">>, BodyJson, <<>>),
+            ?Info("user ~p, TNS ~p", [User, Tns]),
+            Tns;
+        ServiceOrSid when ServiceOrSid == <<"service">>; ServiceOrSid == <<"sid">> ->
+            IpAddr   = proplists:get_value(<<"host">>, BodyJson, <<>>),
+            Port     = binary_to_integer(proplists:get_value(<<"port">>, BodyJson, <<>>)),
+            NewTnsstr
+            = list_to_binary(
+                io_lib:format(
+                "(DESCRIPTION="
+                "  (ADDRESS_LIST="
+                "      (ADDRESS=(PROTOCOL=tcp)"
+                "          (HOST=~s)"
+                "          (PORT=~p)"
+                "      )"
+                "  )"
+                "  (CONNECT_DATA=("++
+                case ServiceOrSid of
+                    <<"service">> -> "SERVICE_NAME";
+                    <<"sid">> -> "SID"
+                end
+                ++"=~s)))",
+                [IpAddr, Port,
                     case ServiceOrSid of
-                        <<"service">> -> "SERVICE_NAME";
-                        <<"sid">> -> "SID"
-                    end
-                    ++"=~s)))",
-                    [IpAddr, Port,
-                     case ServiceOrSid of
-                         <<"service">> -> proplists:get_value(<<"service">>, BodyJson, <<>>);
-                         <<"sid">> -> proplists:get_value(<<"sid">>, BodyJson, <<>>)
-                     end])),
-              ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
-              NewTnsstr
-      end,
-    io:format("DPI loaded! ~p~n",[ye]),
-    dpi:load(),
-    OraCtx = dpi:context_create(3, 0),
-    OraConn = dpi:conn_create(OraCtx, User, Password, TNS, #{}, #{}),
-            ?Debug("OranifSession ~p ~p", [OraCtx, OraConn]),
-            Con = #ddConn {id = Id, name = Name, owner = UserId, adapter = odpi,
-                           access  = jsx:decode(jsx:encode(BodyJson),
-                                                [return_maps])},
-                    ?Debug([{user, User}], "may save/replace new connection ~p", [Con]),
+                        <<"service">> -> proplists:get_value(<<"service">>, BodyJson, <<>>);
+                        <<"sid">> -> proplists:get_value(<<"sid">>, BodyJson, <<>>)
+                    end])),
+            ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
+            NewTnsstr
+    end,
+    % TODO: Evaluate the possibility of one slave per session or connection.
+    CommonParams = #{encoding => Charset, nencoding => Charset},
+    ok = dpi:load(dderl_odpi_slave),
+    ConnectFun = fun() ->
+        % TODO: Do we need a context per connection ? 
+        Ctx = dpi:context_create(?DPI_MAJOR_VERSION, ?DPI_MINOR_VERSION),
+        Conn = dpi:conn_create(Ctx, User, Password, TNS, CommonParams, #{}),
+        #{ctx => Ctx, conn => Conn}
+    end,
+    case dpi:safe(ConnectFun) of
+        #{ctx := Ctx, conn := Conn} = ConnRef ->
+            ?Info("DPI loaded and connected! ~p", [ConnRef]), %TODO: Debug
+            Con = #ddConn{id = Id, name = Name, owner = UserId, adapter = odpi,
+                          access  = jsx:decode(jsx:encode(BodyJson), [return_maps])},
+                ?Debug([{user, User}], "may save/replace new connection ~p", [Con]),
             case dderl_dal:add_connect(Sess, Con) of
                 {error, Msg} ->
-                    dpi:conn_release(OraConn),
-                    dpi:context_destroy(OraCtx),
+                    dpi:safe(fun() ->
+                        ok = dpi:conn_release(Conn),
+                        ok = dpi:context_destroy(Ctx)
+                    end),
                     From ! {reply, jsx:encode([{<<"connect">>,[{<<"error">>, Msg}]}])};
                 #ddConn{owner = Owner} = NewConn ->
                     From ! {reply
@@ -156,23 +161,20 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
                                   , [{<<"conn_id">>, NewConn#ddConn.id}
                                      , {<<"owner">>, Owner}
                                      , {<<"conn">>
-                                        , ?E2B(OraConn)}
+                                        , ?E2B(ConnRef)}
                                     ]}])}
             end,
-            Priv#priv{connections = [OraConn|Connections]};
-
-            %% TODO: manage the context
-        %{error, {_Code, Msg}} = Error when is_list(Msg) ->
-        %    ?Error("DB connect error ~p", [Error]),
-        %    OciPort:close(),
-        %    From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
-        %    Priv;
-        %Error ->
-        %    ?Error("DB connect error ~p", [Error]),
-        %    OciPort:close(),
-        %    From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
-        %    Priv
-    %end;
+            Priv#priv{connections = [ConnRef|Connections]};
+        {error, {{_, _, _, #{message := Msg}} = Error, _ST}} ->
+            % Avoid printing the stacktrace as it can contain password information.
+            ?Error("DB connect error ~p", [Error]),
+            From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
+            Priv;
+        Error ->
+            ?Error("DB connect error ~p", [Error]),
+            From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
+            Priv
+    end;
 
 process_cmd({[<<"change_conn_pswd">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
     io:format("Process command: ~p~n",[change_pswd]),
@@ -183,7 +185,7 @@ process_cmd({[<<"change_conn_pswd">>], ReqBody}, _Sess, _UserId, From, #priv{con
     NewPassword = binary_to_list(proplists:get_value(<<"new_password">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            case dderloci:change_password(Connection, User, Password, NewPassword) of
+            case dderlodpi:change_password(Connection, User, Password, NewPassword) of
                 {error, Error} ->
                     ?Error("change password exception ~n~p~n", [Error]),
                     Err = iolist_to_binary(io_lib:format("~p", [Error])),
@@ -204,7 +206,7 @@ process_cmd({[<<"disconnect">>], ReqBody, _SessionId}, _Sess, _UserId, From, #pr
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            dderloci:close_port(Connection),
+            dderlodpi:close_port(Connection),
             RestConnections = lists:delete(Connection, Connections),
             From ! {reply, jsx:encode([{<<"disconnect">>, <<"ok">>}])},
             Priv#priv{connections = RestConnections};
@@ -554,10 +556,10 @@ process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
                                    
                                    BindVals0 -> BindVals0
                                end,
-                    case dderloci:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
+                    case dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
                         {ok, #stmtResult{} = StmtRslt, TableName} ->
                             io:format("Button Pass: ~p~n", [6]),
-                            dderloci:add_fsm(StmtRslt#stmtResult.stmtRef, FsmStmt),
+                            dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, FsmStmt),
                             io:format("Button Pass: ~p~n", [7]),
                             FsmCtx = generate_fsmctx_oci(StmtRslt, Query, BindVals, Connection, TableName),
                             io:format("Button Pass: ~p~n", [8]),
@@ -630,15 +632,15 @@ process_cmd({[<<"download_query">>], ReqBody}, _Sess, UserId, From, Priv, SessPi
                                    BindVals0 -> BindVals0
                                 end,
     Id = proplists:get_value(<<"id">>, BodyJson, <<>>),
-    case dderloci:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
+    case dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
         {ok, #stmtResult{stmtCols = Clms, stmtRef = StmtRef, rowFun = RowFun}, _} ->
             Columns = gen_adapter:build_column_csv(UserId, odpi, Clms),
             From ! {reply_csv, FileName, Columns, first},
             ProducerPid = spawn(fun() ->
                 produce_csv_rows(UserId, From, StmtRef, RowFun)
             end),
-            dderloci:add_fsm(StmtRef, {?MODULE, ProducerPid}),
-            dderloci:fetch_recs_async(StmtRef, [{fetch_mode, push}], 0),
+            dderlodpi:add_fsm(StmtRef, {?MODULE, ProducerPid}),
+            dderlodpi:fetch_recs_async(StmtRef, [{fetch_mode, push}], 0),
             ?Debug("process_query created statement ~p for ~p", [ProducerPid, Query]);
         Error ->
             ?Error("query error ~p", [Error]),
@@ -674,7 +676,7 @@ produce_csv_rows(UserId, From, StmtRef, RowFun) when is_function(RowFun) andalso
             case erlang:process_info(From) of
                 undefined ->
                     ?Error("Request aborted (response pid ~p invalid)", [From]),
-                    dderloci:close(StmtRef);
+                    dderlodpi:close(StmtRef);
                 _ ->
                     produce_csv_rows_result(Data, UserId, From, StmtRef, RowFun)
             end
@@ -682,7 +684,7 @@ produce_csv_rows(UserId, From, StmtRef, RowFun) when is_function(RowFun) andalso
 
 produce_csv_rows_result({error, Error}, _UserId, From, StmtRef, _RowFun) ->
     From ! {reply_csv, <<>>, list_to_binary(io_lib:format("Error: ~p", [Error])), last},
-    dderloci:close(StmtRef);
+    dderlodpi:close(StmtRef);
 produce_csv_rows_result({Rows, false}, UserId, From, StmtRef, RowFun) when is_list(Rows), is_function(RowFun) ->
     CsvRows = gen_adapter:make_csv_rows(UserId, Rows, RowFun, odpi),
     From ! {reply_csv, <<>>, CsvRows, continue},
@@ -690,12 +692,12 @@ produce_csv_rows_result({Rows, false}, UserId, From, StmtRef, RowFun) when is_li
 produce_csv_rows_result({Rows, true}, UserId, From, StmtRef, RowFun) when is_list(Rows), is_function(RowFun) ->
     CsvRows = gen_adapter:make_csv_rows(UserId, Rows, RowFun, odpi),
     From ! {reply_csv, <<>>, CsvRows, last},
-    dderloci:close(StmtRef).
+    dderlodpi:close(StmtRef).
 
 -spec disconnect(#priv{}) -> #priv{}.
 disconnect(#priv{connections = Connections} = Priv) ->
     ?Debug("closing the connections ~p", [Connections]),
-    [dderloci:close_port(Connection) || Connection <- Connections],
+    [dderlodpi:close_port(Connection) || Connection <- Connections],
     Priv#priv{connections = []}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -751,7 +753,7 @@ open_view(Sess, Connection, SessPid, ConnId, Binds, #ddView{id = Id, name = Name
 -spec process_query(tuple()|binary(), tuple(), pid()) -> list().
 process_query({Query, BindVals}, Connection, SessPid) ->
     io:format("Process Query: ~p pass ~p~n",[0, 0]),
-    CheckFuns = check_funs(dderloci:exec(Connection, Query, BindVals,
+    CheckFuns = check_funs(dderlodpi:exec(Connection, Query, BindVals,
                                            imem_sql_expr:rownum_limit())),
     io:format("q check_funs: ~p ~n",[CheckFuns]),
     io:format("q Query:      ~p ~n",[Query]),
@@ -765,7 +767,7 @@ process_query({Query, BindVals}, Connection, SessPid) ->
 
 process_query(Query, Connection, SessPid) ->
     io:format("Process Query: ~p~n",[1]),
-    process_query(check_funs(dderloci:exec(Connection, Query,
+    process_query(check_funs(dderlodpi:exec(Connection, Query,
                                            imem_sql_expr:rownum_limit())),
                   Query, [], Connection, SessPid).
 
@@ -783,7 +785,7 @@ process_query({ok, #stmtResult{sortSpec = SortSpec, stmtCols = Clms} = StmtRslt,
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     FsmCtx = generate_fsmctx_oci(StmtRslt, Query, BindVals, Connection, TableName),
     StmtFsm = dderl_fsm:start(FsmCtx, SessPid),
-    dderloci:add_fsm(StmtRslt#stmtResult.stmtRef, StmtFsm),
+    dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, StmtFsm),
     ?Debug("StmtRslt ~p ~p", [Clms, SortSpec]),
     Columns = gen_adapter:build_column_json(lists:reverse(Clms)),
     JSortSpec = build_srtspec_json(SortSpec),
@@ -835,7 +837,7 @@ process_table_cmd(Cmd, TableName, BodyJson, Connections) ->
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            case dderloci:run_table_cmd(Connection, Cmd, TableName) of
+            case dderlodpi:run_table_cmd(Connection, Cmd, TableName) of
                 ok -> ok;
                 {error, Error} ->
                     ?Error("query error ~p", [Error]),
@@ -924,12 +926,12 @@ generate_fsmctx_oci(#stmtResult{
            ,bind_vals     = BindVals
            ,table_name    = TableName
            ,block_length  = ?DEFAULT_ROW_SIZE
-           ,fetch_recs_async_fun = fun(Opts, Count) -> io:format("fetch_recs_async_fun call! Opts: ~p Count: ~p~n",[Opts, Count]), dderloci:fetch_recs_async(StmtRef, Opts, Count) end
-           ,fetch_close_fun = fun() -> dderloci:fetch_close(StmtRef) end
-           ,stmt_close_fun  = fun() -> dderloci:close(StmtRef) end
+           ,fetch_recs_async_fun = fun(Opts, Count) -> io:format("fetch_recs_async_fun call! Opts: ~p Count: ~p~n",[Opts, Count]), dderlodpi:fetch_recs_async(StmtRef, Opts, Count) end
+           ,fetch_close_fun = fun() -> dderlodpi:fetch_close(StmtRef) end
+           ,stmt_close_fun  = fun() -> dderlodpi:close(StmtRef) end
            ,filter_and_sort_fun =
                 fun(FilterSpec, SrtSpec, Cols) ->
-                        dderloci:filter_and_sort(StmtRef, Connection, FilterSpec, SrtSpec, Cols, Query)
+                        dderlodpi:filter_and_sort(StmtRef, Connection, FilterSpec, SrtSpec, Cols, Query)
                 end
            ,update_cursor_prepare_fun =
                 fun(ChangeList) ->
