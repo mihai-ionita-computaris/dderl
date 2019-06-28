@@ -94,11 +94,7 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
 
     Method    = proplists:get_value(<<"method">>, BodyJson, <<"service">>),
     User      = proplists:get_value(<<"user">>, BodyJson, <<>>),
-    Defaults  = ?NLSLANG,
-    % TODO: Lang and territory not supported yet by odpi
-    % Language  = get_value_empty_default(<<"languange">>, BodyJson, Defaults),
-    % Territory = get_value_empty_default(<<"territory">>, BodyJson, Defaults),
-    Charset = binary_to_list(get_value_empty_default(<<"charset">>, BodyJson, Defaults)),
+    Charset = binary_to_list(get_value_empty_default(<<"charset">>, BodyJson, ?NLSLANG)),
 
     TNS = case Method of
         <<"tns">> ->
@@ -132,9 +128,9 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
             ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
             NewTnsstr
     end,
-    % TODO: Evaluate the possibility of one slave per session or connection.
     CommonParams = #{encoding => Charset, nencoding => Charset},
-    ok = dpi:load(dderl_odpi_slave),
+    % One slave per userid
+    ok = dpi:load(build_slave_name(UserId)),
     ConnectFun = fun() ->
         % TODO: Do we need a context per connection ? 
         Ctx = dpi:context_create(?DPI_MAJOR_VERSION, ?DPI_MINOR_VERSION),
@@ -206,7 +202,11 @@ process_cmd({[<<"disconnect">>], ReqBody, _SessionId}, _Sess, _UserId, From, #pr
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            dderlodpi:close_port(Connection),
+            #{ctx := Ctx, conn := Conn} = Connection,
+            dpi:safe(fun() ->
+                ok = dpi:conn_release(Conn),
+                ok = dpi:context_destroy(Ctx)
+            end),
             RestConnections = lists:delete(Connection, Connections),
             From ! {reply, jsx:encode([{<<"disconnect">>, <<"ok">>}])},
             Priv#priv{connections = RestConnections};
@@ -378,8 +378,8 @@ process_cmd({[<<"browse_data">>], ReqBody}, Sess, _UserId, From, #priv{connectio
 
 % views
 process_cmd({[<<"views">>], ReqBody}, Sess, UserId, From, Priv, SessPid) ->
-    io:format("Process command: ~p~n",[views]),
-    [{<<"views">>,BodyJson}] = ReqBody,
+    ?Info("Process command: ~p~n", [views]),
+    [{<<"views">>, BodyJson}] = ReqBody,
     %% This should be change to params...
     ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>),
     case dderl_dal:get_view(Sess, <<"All ddViews">>, odpi, UserId) of
@@ -955,6 +955,10 @@ get_value_empty_default(Key, Proplist, Defaults) ->
           <<"charset">> -> maps:get(charset, Defaults, <<>>)
       end).
 
+build_slave_name(system) -> odpi_node_system;
+build_slave_name(UserId) when is_integer(UserId) -> 
+    list_to_atom("odpi_node_" ++ integer_to_list(UserId)).
+
 -spec get_deps() -> [atom()].
 get_deps() -> [oranif].
 
@@ -1032,3 +1036,19 @@ logfun({Lvl, File, Func, Line, Msg}) ->
     end;
 logfun(Log) ->
     io:format(user, "Log in unsupported format ~p~n", [Log]).
+
+%-------------------------------------------------------------------------------
+% TESTS
+%-------------------------------------------------------------------------------
+
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+build_slave_name_test_() ->
+    [
+        ?_assertEqual(odpi_node_system, build_slave_name(system)),
+        ?_assertEqual(odpi_node_123456, build_slave_name(123456))
+    ].
+
+-endif.

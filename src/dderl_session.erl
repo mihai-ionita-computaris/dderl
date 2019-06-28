@@ -673,8 +673,7 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_}, #state{sess = Sess, user_
 
 spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, SelfPid) ->
     try
-        io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess , UserId, From, CurrentPriv, SelfPid) with args ~p ~p ~p ~p ~p ~p ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
-        io:format("cmd: ~p BodyJson: ~p Sess: ~p UserId: ~p Form: ~p CurrentPriv: ~p SelfPid: ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
+        io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess , UserId, From, CurrentPriv, SelfPid) with  ~p ~p ~p ~p ~p ~p ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
         io:format("Pass number 1 ~p~n",[qwerttzuioplkj]),
         SelfPid ! rearm_session_idle_timer
