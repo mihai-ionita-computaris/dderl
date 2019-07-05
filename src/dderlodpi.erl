@@ -51,13 +51,12 @@ exec(Connection, Sql, MaxRowCount) ->
 exec(Connection, OrigSql, Binds, MaxRowCount) ->
     {Sql, NewSql, TableName, RowIdAdded, SelectSections} =
         parse_sql(sqlparse:parsetree(OrigSql), OrigSql),
-        %io:format("run_query with args Connection: ~p Sql: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p, SelectSections: ~p~n",[Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
     case catch run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) of
         {'EXIT', {{error, Error}, ST}} ->
-            ?Error("run_query([Sql: ~p],[Binds: ~p],[NewSql: ~p])~n{[Error: ~p],[ST: ~p]}", [Sql, Binds, NewSql, Error, ST]),
+            ?Error("run_query(~s,~p,~s)~n{~p,~p}", [Sql, Binds, NewSql, Error, ST]),
             {error, Error};
         {'EXIT', {Error, ST}} ->
-            ?Error("run_query([Sql: ~p],[Binds: ~p],[NewSql: ~p])~n{[Error: ~p],[ST: ~p]}", [Sql, Binds, NewSql, Error, ST]),
+            ?Error("run_query(~s,~p,~s)~n{~p,~p}", [Sql, Binds, NewSql, Error, ST]),
             {error, Error};
         {ok, #stmtResult{} = StmtResult, ContainRowId} ->
             LowerSql = string:to_lower(binary_to_list(Sql)),
@@ -359,29 +358,30 @@ execute_with_binds(Stmt, BindVars, Binds) ->
 
 run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
-%io:format("RUN QUERY: Connection: ~p SQL: ~p Binds: ~p NewSql: ~p RowIdAdded: ~p SelectSections: ~p end~n", [Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections]),
-    dpi:load(),
-    io:format("Pass ~p~n",[1]),
-    try dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>) of 
-        Statement -> 
-            io:format("Pass ~p Connection ~p Statement ~p Binds ~p~n",[2, Connection, Statement, Binds]),
+    case dpi:safe(fun() ->
+        dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>)
+    end) of
+        {error, Error} when Sql =/= NewSql ->
+            ?Error("Got error executing the new query ~p", [Error]), %% TODO: Remove.
+            case dpi:safe(fun() ->
+                dpi:conn_prepareStmt(Connection, false, Sql, <<"">>)
+            end) of
+                {error, Error} ->
+                    ?Error("Got error executing original query ~p", [Error]),
+                    error(Error);
+                Statement ->
+                    ?Info("The statement ~p", [Statement]),
+                    StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+                    result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+                             SelectSections)
+            end;
+        {error, Error} ->
+            ?Info("Got error query the same... ~p", [Error]),
+            error(Error);
+        Statement ->
             StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
-            io:format("Pass ~p~n",[3]),
-            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
-                             SelectSections),
-            io:format("Pass ~p~n",[4])
-    catch Class:Error -> 
-        io:format("Oh no! ~p ~p ~p~n",[12121, Class, Error]),
-        try dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of 
-            Statement ->
-                io:format("Pass ~p~n",[-1]),
-                StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
             result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
-        catch Class2:Error2 -> 
-            io:format("PH NO ~p ~p ~p~n",[1, Class2, Error2]),
-            {error, "Fatal Error in run_query."}
-        end
     end.
 
 result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Connection, SelectSections) ->

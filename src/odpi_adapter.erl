@@ -80,12 +80,10 @@ add_conn_extra(#ddConn{access = Access}, Conn0) when is_list(Access), is_map(Con
                 
 process_cmd({[<<"connect">>], ReqBody, _SessionId}, Sess, UserId, From,
             undefined, SessPid) ->
-                io:format("Process command: ~p~n",[connect_overload]),
     process_cmd({[<<"connect">>], ReqBody, _SessionId}, Sess, UserId, From,
                 #priv{connections = []}, SessPid);
 process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
             #priv{connections = Connections} = Priv, _SessPid) ->
-                io:format("Process command: ~p~n",[connect]),
     {value, {<<"password">>, Password}, BodyJson4} = lists:keytake(<<"password">>, 1, BodyJson5),
     {value, {<<"owner">>, _Owner}, BodyJson3} = lists:keytake(<<"owner">>, 1, BodyJson4),
     {value, {<<"id">>, Id}, BodyJson2} = lists:keytake(<<"id">>, 1, BodyJson3),
@@ -132,23 +130,19 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
     % One slave per userid
     ok = dpi:load(build_slave_name(UserId)),
     ConnectFun = fun() ->
-        % TODO: Do we need a context per connection ? 
         Ctx = dpi:context_create(?DPI_MAJOR_VERSION, ?DPI_MINOR_VERSION),
         Conn = dpi:conn_create(Ctx, User, Password, TNS, CommonParams, #{}),
         #{ctx => Ctx, conn => Conn}
     end,
     case dpi:safe(ConnectFun) of
-        #{ctx := Ctx, conn := Conn} = ConnRef ->
-            ?Info("DPI loaded and connected! ~p", [ConnRef]), %TODO: Debug
+        #{ctx := _Ctx, conn := _Conn} = ConnRef ->
+            ?Debug("DPI loaded and connected! ~p", [ConnRef]),
             Con = #ddConn{id = Id, name = Name, owner = UserId, adapter = odpi,
                           access  = jsx:decode(jsx:encode(BodyJson), [return_maps])},
                 ?Debug([{user, User}], "may save/replace new connection ~p", [Con]),
             case dderl_dal:add_connect(Sess, Con) of
                 {error, Msg} ->
-                    dpi:safe(fun() ->
-                        ok = dpi:conn_release(Conn),
-                        ok = dpi:context_destroy(Ctx)
-                    end),
+                    conn_close_and_destroy(ConnRef),
                     From ! {reply, jsx:encode([{<<"connect">>,[{<<"error">>, Msg}]}])};
                 #ddConn{owner = Owner} = NewConn ->
                     From ! {reply
@@ -202,14 +196,16 @@ process_cmd({[<<"disconnect">>], ReqBody, _SessionId}, _Sess, _UserId, From, #pr
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            #{ctx := Ctx, conn := Conn} = Connection,
-            dpi:safe(fun() ->
-                ok = dpi:conn_release(Conn),
-                ok = dpi:context_destroy(Ctx)
-            end),
-            RestConnections = lists:delete(Connection, Connections),
-            From ! {reply, jsx:encode([{<<"disconnect">>, <<"ok">>}])},
-            Priv#priv{connections = RestConnections};
+            case conn_close_and_destroy(Connection) of
+                ok ->
+                    RestConnections = lists:delete(Connection, Connections),
+                    From ! {reply, jsx:encode([{<<"disconnect">>, <<"ok">>}])},
+                    Priv#priv{connections = RestConnections};
+                {error, Error} ->
+                    ?Error("Unable to close connection ~p", [Error]),
+                    From ! {reply, jsx:encode([{<<"error">>, <<"Unable to close connection">>}])},
+                    Priv
+            end;
         false ->
             From ! {reply, jsx:encode([{<<"error">>, <<"Connection not found">>}])},
             Priv
@@ -220,7 +216,7 @@ process_cmd({[<<"remote_apps">>], ReqBody}, _Sess, _UserId, From, #priv{connecti
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
         true ->
-            % erloci instance is always in local node
+            % odpi instance is always in local node
             Apps = application:which_applications(),
             Versions = dderl_session:get_apps_version(Apps, []),
             From ! {reply, jsx:encode([{<<"remote_apps">>, Versions}])},
@@ -236,48 +232,16 @@ process_cmd({[<<"query">>], ReqBody}, Sess, _UserId, From, #priv{connections = C
     case make_binds(proplists:get_value(<<"binds">>, BodyJson, null)) of
         {error, Error} -> From ! {reply, jsx:encode([{<<"error">>, Error}])};
         BindVals ->
-            io:format("Got the BindVals.: ~p~n",[0]),
             Query = proplists:get_value(<<"qstr">>, BodyJson, <<>>),
-            io:format("Got the Query.: ~p~n",[Query]),
             Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
-            io:format("Got the Connection.: ~p~n",[Connection]),
-            ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>), %% TODO: This should be change to params...
-            io:format("Got the ConnId.: ~p~n",[ConnId]),
+            ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>),
             case lists:member(Connection, Connections) of
                 true ->
-                    io:format("Member conns true. ~p~n",[0]),
                     R = case dderl_dal:is_local_query(Query) of
-                            true -> io:format("is local query: ~p~n", [true]),gen_adapter:process_query(Query, Sess, {ConnId, odpi}, SessPid);
-                            Meow -> io:format("is local query: ~p ~p ~n", [false, Meow]), process_query({Query, BindVals}, Connection, SessPid)
+                            true -> gen_adapter:process_query(Query, Sess, {ConnId, odpi}, SessPid);
+                            _ -> process_query({Query, BindVals}, Connection, SessPid)
                         end,
-                        io:format("R is: ~p~n",[R]),
-                        R2 = [{<<"columns">>,
-       [[{<<"id">>,<<"sel">>},
-         {<<"name">>,<<>>},
-         {<<"field">>,<<"id">>},
-         {<<"behavior">>,<<"select">>},
-         {<<"cssClass">>,<<"id-cell-selection">>},
-         {<<"width">>,38},
-         {<<"minWidth">>,2},
-         {<<"cannotTriggerInsert">>,true},
-         {<<"resizable">>,true},
-         {<<"sortable">>,false},
-         {<<"selectable">>,false}],
-        [{<<"editor">>,<<"true">>},
-         {<<"id">>,<<"2_1">>},
-         {<<"type">>,<<"numeric">>},
-         {<<"name">>,<<"2">>},
-         {<<"field">>,<<"2_1">>},
-         {<<"resizable">>,true},
-         {<<"sortable">>,false},
-         {<<"selectable">>,true}]]},
-      {<<"sort_spec">>,[]},
-      {<<"statement">>,
-       <<"g2gCZAAJZGRlcmxfZnNtZ2QAEGRkZXJsMUAxMjcuMC4wLjEAAAOYAAAAAAE=">>},
-      {<<"connection">>,
-       <<"g2gDZAAIb2NpX3BvcnRnZAAQZGRlcmwxQDEyNy4wLjAuMQAAA28AAAAAAW4GAIDcIDm/AQ==">>}],
-
-                    From ! {reply, jsx:encode([{<<"query">>,[{<<"qstr">>, Query} | R2]}])};
+                    From ! {reply, jsx:encode([{<<"query">>,[{<<"qstr">>, Query} | R]}])};
                 false ->
                     From ! {reply, error_invalid_conn(Connection, Connections)}
             end
@@ -697,7 +661,8 @@ produce_csv_rows_result({Rows, true}, UserId, From, StmtRef, RowFun) when is_lis
 -spec disconnect(#priv{}) -> #priv{}.
 disconnect(#priv{connections = Connections} = Priv) ->
     ?Debug("closing the connections ~p", [Connections]),
-    [dderlodpi:close_port(Connection) || Connection <- Connections],
+    [conn_close_and_destroy(ConnRef) || ConnRef <- Connections],
+    dpi:unload(),
     Priv#priv{connections = []}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -752,19 +717,11 @@ open_view(Sess, Connection, SessPid, ConnId, Binds, #ddView{id = Id, name = Name
 
 -spec process_query(tuple()|binary(), tuple(), pid()) -> list().
 process_query({Query, BindVals}, Connection, SessPid) ->
-    io:format("Process Query: ~p pass ~p~n",[0, 0]),
-    CheckFuns = check_funs(dderlodpi:exec(Connection, Query, BindVals,
-                                           imem_sql_expr:rownum_limit())),
-    io:format("q check_funs: ~p ~n",[CheckFuns]),
-    io:format("q Query:      ~p ~n",[Query]),
-    io:format("q BindVals:   ~p ~n",[BindVals]),
-    io:format("q Connection: ~p ~n",[Connection]),
-    io:format("q SessPid:    ~p ~n",[CheckFuns]),
-    Ret = process_query(CheckFuns,
-                  Query, BindVals, Connection, SessPid),
-            io:format("Process Query: ~p pass ~p~n",[0, 1]),
-            Ret;
-
+    Result = dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()),
+    ?Info("Exec result ~p", [Result]), %% TODO: Debug
+    CheckFuns = check_funs(Result),
+    ?Info("check_funs: ~p ~n", [CheckFuns]), %% TODO: Debug
+    process_query(CheckFuns, Query, BindVals, Connection, SessPid);
 process_query(Query, Connection, SessPid) ->
     io:format("Process Query: ~p~n",[1]),
     process_query(check_funs(dderlodpi:exec(Connection, Query,
@@ -1036,6 +993,12 @@ logfun({Lvl, File, Func, Line, Msg}) ->
     end;
 logfun(Log) ->
     io:format(user, "Log in unsupported format ~p~n", [Log]).
+
+conn_close_and_destroy(#{ctx := Ctx, conn := Conn}) ->
+    dpi:safe(fun() ->
+        ok = dpi:conn_close(Conn, [], <<>>),
+        ok = dpi:context_destroy(Ctx)
+    end).
 
 %-------------------------------------------------------------------------------
 % TESTS
