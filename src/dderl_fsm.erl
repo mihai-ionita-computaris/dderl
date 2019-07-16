@@ -250,10 +250,8 @@ gui_req(button, <<"tail">>, ReplyTo, {?MODULE,Pid}) ->
     ?NoDbLog(debug, [], "button ~p", [<<"tail">>]),
     gen_statem:cast(Pid,{button, <<"tail">>, ReplyTo});
 gui_req(CommandStr, Parameter, ReplyTo, {?MODULE,Pid}) when is_atom(CommandStr) ->
-    io:format(user, "FSM gui_req call with CommandStr ~p Parameter ~p ReplyTo ~p ~n",[CommandStr, Parameter, ReplyTo]),
     ?NoDbLog(debug, [], "~p ~p", [CommandStr,Parameter]),
-    gen_statem:cast(Pid,{CommandStr, Parameter, ReplyTo});
-gui_req(A, B, C, D) -> io:format(user, "ERROR! gui_req unknown params of ~p, ~p, ~p and ~p~n",[A, B, C, D]), ok.
+    gen_statem:cast(Pid,{CommandStr, Parameter, ReplyTo}).
 
 -spec close({atom(), pid()}) -> ok.
 close({?MODULE, Pid}) ->
@@ -271,10 +269,7 @@ get_count({?MODULE, Pid}) ->
 %% the return tuple type #stmtcol{}. but is not imported
 -spec get_columns({atom(), pid()}) -> [tuple()].
 get_columns({?MODULE, Pid}) ->
-    io:format("get columns. Pid ~p Self ~p ~n",[Pid, self()]),
-    Res = gen_statem:call(Pid,{"get_columns"}),
-    io:format("get columns done ~p ~n",[ay]),
-    Res.
+    gen_statem:call(Pid, {"get_columns"}).
 
 -spec get_query({atom(), pid()}) -> binary().
 get_query({?MODULE, Pid}) ->
@@ -1426,12 +1421,8 @@ callback_mode() ->
 %%          {stop, Reason, NewStateData, Reply}
 %% --------------------------------------------------------------------
 handle_call({"get_columns"}, From, SN, #state{ctx=#ctx{stmtCols=Columns}}=State) ->
-    io:format(user, "PID ~p handling get_columns pre ~p~n",[self(), 0]),
-    io:format(user, "PID ~p handling get_columns call. From: ~p SN: ~p Columns: ~p~n",[self(), From, SN, Columns]),
     ?NoDbLog(debug, [], "get_columns ~p", [Columns]),
-    Ret = {next_state, SN, State, [{reply, From, Columns}]},
-    io:format(user, "PID ~p handling get_columns Ret ~p~n",[self(), Ret]),
-    Ret;
+    {next_state, SN, State, [{reply, From, Columns}]};
 handle_call(get_count, From, SN, #state{bufCnt = Count} = State) ->
     ?NoDbLog(debug, [], "get_count ~p", [Count]),
     {next_state, SN, State, [{reply, From, Count}]};

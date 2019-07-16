@@ -128,14 +128,14 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
     end,
     CommonParams = #{encoding => Charset, nencoding => Charset},
     % One slave per userid
-    ok = dpi:load(build_slave_name(UserId)),
+    Node = dpi:load(build_slave_name(UserId)),
     ConnectFun = fun() ->
         Ctx = dpi:context_create(?DPI_MAJOR_VERSION, ?DPI_MINOR_VERSION),
         Conn = dpi:conn_create(Ctx, User, Password, TNS, CommonParams, #{}),
-        #{ctx => Ctx, conn => Conn}
+        #odpi_conn{context = Ctx, connection = Conn, node = Node}
     end,
-    case dpi:safe(ConnectFun) of
-        #{ctx := _Ctx, conn := _Conn} = ConnRef ->
+    case dpi:safe(Node, ConnectFun) of
+        #odpi_conn{} = ConnRef ->
             ?Debug("DPI loaded and connected! ~p", [ConnRef]),
             Con = #ddConn{id = Id, name = Name, owner = UserId, adapter = odpi,
                           access  = jsx:decode(jsx:encode(BodyJson), [return_maps])},
@@ -154,7 +154,7 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
                                         , ?E2B(ConnRef)}
                                     ]}])}
             end,
-            Priv#priv{connections = [ConnRef|Connections]};
+            Priv#priv{connections = [ConnRef | Connections]};
         {error, {{_, _, _, #{message := Msg}} = Error, _ST}} ->
             % Avoid printing the stacktrace as it can contain password information.
             ?Error("DB connect error ~p", [Error]),
@@ -525,7 +525,7 @@ process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
                             io:format("Button Pass: ~p~n", [6]),
                             dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, FsmStmt),
                             io:format("Button Pass: ~p~n", [7]),
-                            FsmCtx = generate_fsmctx_oci(StmtRslt, Query, BindVals, Connection, TableName),
+                            FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
                             io:format("Button Pass: ~p~n", [8]),
                             FsmStmt:gui_req(button, <<"restart">>, gui_resp_cb_fun(<<"button">>, FsmStmt, From)),
                             io:format("Button Pass: ~p~n", [9]),
@@ -662,7 +662,6 @@ produce_csv_rows_result({Rows, true}, UserId, From, StmtRef, RowFun) when is_lis
 disconnect(#priv{connections = Connections} = Priv) ->
     ?Debug("closing the connections ~p", [Connections]),
     [conn_close_and_destroy(ConnRef) || ConnRef <- Connections],
-    dpi:unload(),
     Priv#priv{connections = []}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -737,10 +736,10 @@ process_query(ok, Query, BindVals, Connection, SessPid) ->
     %{cols,[{<<"123">>,'SQLT_NUM',22,0,-127},
     %           {<<"ROWID">>,'SQLT_RDD',8,0,0}]};    %% hardcoded
 process_query({ok, #stmtResult{sortSpec = SortSpec, stmtCols = Clms} = StmtRslt, TableName},
-              Query, BindVals, {oci_port, _, _} = Connection, SessPid) ->
+              Query, BindVals, #odpi_conn{} = Connection, SessPid) ->
                   io:format("Process Query: ~p~n",[3]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
-    FsmCtx = generate_fsmctx_oci(StmtRslt, Query, BindVals, Connection, TableName),
+    FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
     StmtFsm = dderl_fsm:start(FsmCtx, SessPid),
     dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, StmtFsm),
     ?Debug("StmtRslt ~p ~p", [Clms, SortSpec]),
@@ -752,14 +751,14 @@ process_query({ok, #stmtResult{sortSpec = SortSpec, stmtCols = Clms} = StmtRslt,
      {<<"sort_spec">>, JSortSpec},
      {<<"statement">>, base64:encode(term_to_binary(StmtFsm))},
      {<<"connection">>, ?E2B(Connection)}];
-process_query({ok, Values}, Query, BindVals, {oci_port, _, _} = Connection, SessPid) ->
+process_query({ok, Values}, Query, BindVals, #odpi_conn{} = Connection, SessPid) ->
     io:format("Process Query: ~p~n",[4]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     [{<<"data">>, Values},
      {<<"connection">>, ?E2B(Connection)}];
-process_query({error, {Code, Msg}}, Query, BindVals, _Connection, _SessPid) when is_binary(Msg) ->
+process_query({error, Msg}, Query, BindVals, _Connection, _SessPid) when is_binary(Msg) ->
     io:format("Process Query: ~p~n",[5]),
-    ?Error("query error ~p for ~p whith bind values ~p", [{Code, Msg}, Query, BindVals]),
+    ?Error("query error ~p for ~p whith bind values ~p", [Msg, Query, BindVals]),
     [{<<"error">>, Msg}];
 process_query(Error, Query, BindVals, _Connection, _SessPid) ->
     io:format("Process Query: ~p~n",[6]),
@@ -866,14 +865,13 @@ check_funs({ok, #stmtResult{rowFun = RowFun, sortFun = SortFun} = StmtRslt, Tabl
 check_funs(Error) ->
     Error.
 
--spec generate_fsmctx_oci(#stmtResult{}, binary(), list(), tuple(), term()) -> #fsmctx{}.
-generate_fsmctx_oci(#stmtResult{
+-spec generate_fsmctx(#stmtResult{}, binary(), list(), tuple(), term()) -> #fsmctx{}.
+generate_fsmctx(#stmtResult{
                   stmtCols = Clms
                 , rowFun   = RowFun
                 , stmtRef  = StmtRef
                 , sortFun  = SortFun
-                , sortSpec = SortSpec} = Foo, Query, BindVals, {oci_port, _, _} = Connection, TableName) ->
-                io:format("generate_fsmctx_oci call! stmtResult ~p Query ~p BindVals ~p Connection ~p TableName ~p ~n",[Foo, Query, BindVals, Connection, TableName]),
+                , sortSpec = SortSpec}, Query, BindVals, #odpi_conn{} = Connection, TableName) ->
     #fsmctx{id            = "what is it?"
            ,stmtCols      = Clms
            ,rowFun        = RowFun
@@ -883,7 +881,7 @@ generate_fsmctx_oci(#stmtResult{
            ,bind_vals     = BindVals
            ,table_name    = TableName
            ,block_length  = ?DEFAULT_ROW_SIZE
-           ,fetch_recs_async_fun = fun(Opts, Count) -> io:format("fetch_recs_async_fun call! Opts: ~p Count: ~p~n",[Opts, Count]), dderlodpi:fetch_recs_async(StmtRef, Opts, Count) end
+           ,fetch_recs_async_fun = fun(Opts, Count) -> dderlodpi:fetch_recs_async(StmtRef, Opts, Count) end
            ,fetch_close_fun = fun() -> dderlodpi:fetch_close(StmtRef) end
            ,stmt_close_fun  = fun() -> dderlodpi:close(StmtRef) end
            ,filter_and_sort_fun =
@@ -994,11 +992,12 @@ logfun({Lvl, File, Func, Line, Msg}) ->
 logfun(Log) ->
     io:format(user, "Log in unsupported format ~p~n", [Log]).
 
-conn_close_and_destroy(#{ctx := Ctx, conn := Conn}) ->
-    dpi:safe(fun() ->
+conn_close_and_destroy(#odpi_conn{context = Ctx, connection = Conn, node = Node}) ->
+    dpi:safe(Node, fun() ->
         ok = dpi:conn_close(Conn, [], <<>>),
         ok = dpi:context_destroy(Ctx)
-    end).
+    end),
+    dpi:unload(Node).
 
 %-------------------------------------------------------------------------------
 % TESTS

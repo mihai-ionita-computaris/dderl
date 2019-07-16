@@ -36,6 +36,7 @@
              ,max_rowcount
              ,pushlock
              ,contain_rownum
+             ,connection
              }).
 
 -define(PREFETCH_SIZE, 250).
@@ -43,11 +44,11 @@
 %% ===================================================================
 %% Exported functions
 %% ===================================================================
--spec exec(reference(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
+-spec exec(map(), binary(), integer()) -> ok | {ok, pid()} | {error, term()}.
 exec(Connection, Sql, MaxRowCount) ->
     exec(Connection, Sql, undefined, MaxRowCount).
 
--spec exec(tuple(), binary(), tuple(), integer()) -> ok | {ok, pid()} | {error, term()}.
+-spec exec(map(), binary(), tuple(), integer()) -> ok | {ok, pid()} | {error, term()}.
 exec(Connection, OrigSql, Binds, MaxRowCount) ->
     {Sql, NewSql, TableName, RowIdAdded, SelectSections} =
         parse_sql(sqlparse:parsetree(OrigSql), OrigSql),
@@ -64,7 +65,9 @@ exec(Connection, OrigSql, Binds, MaxRowCount) ->
                 0 -> ContainRowNum = false;
                 _ -> ContainRowNum = true
             end,
-            {ok, Pid} = gen_server:start(?MODULE, [SelectSections, StmtResult, ContainRowId, MaxRowCount, ContainRowNum], []),
+            {ok, Pid} = gen_server:start(?MODULE, [
+                SelectSections, StmtResult, ContainRowId, MaxRowCount, ContainRowNum, Connection
+            ], []),
             SortSpec = gen_server:call(Pid, build_sort_spec, ?ExecTimeout),
             %% Mask the internal stmt ref with our pid.
             {ok, StmtResult#stmtResult{stmtRef = Pid, sortSpec = SortSpec}, TableName};
@@ -86,6 +89,7 @@ add_fsm(Pid, FsmRef) ->
 
 -spec fetch_recs_async(pid(), list(), integer()) -> ok.
 fetch_recs_async(Pid, Opts, Count) ->
+    ?Info("Called!! :D ~p, ~p, ~p", [Pid, Opts, Count]),
     gen_server:cast(Pid, {fetch_recs_async, lists:member({fetch_mode, push}, Opts), Count}).
 
 -spec fetch_close(pid()) -> ok.
@@ -105,13 +109,14 @@ close_port({OciMod, PortPid, _Conn}) -> close_port({OciMod, PortPid});
 close_port({_OciMod, _PortPid} = Port) -> oci_port:close(Port).
 
 %% Gen server callbacks
-init([SelectSections, StmtResult, ContainRowId, MaxRowCount, ContainRowNum]) ->
+init([SelectSections, StmtResult, ContainRowId, MaxRowCount, ContainRowNum, Connection]) ->
     {ok, #qry{
             select_sections = SelectSections,
             stmt_result = StmtResult,
             contain_rowid = ContainRowId,
             max_rowcount = MaxRowCount,
-            contain_rownum = ContainRowNum}}.
+            contain_rownum = ContainRowNum,
+            connection = Connection}}.
 
 handle_call({filter_and_sort, Connection, FilterSpec, SortSpec, Cols, Query}, _From, #qry{stmt_result = StmtResult} = State) ->
     #stmtResult{stmtCols = StmtCols} = StmtResult,
@@ -148,18 +153,22 @@ handle_cast({fetch_recs_async, true, FsmNRows}, #qry{max_rowcount = MaxRowCount}
     end,
     gen_server:cast(self(), {fetch_push, 0, RowsToRequest}),
     {noreply, State};
-handle_cast({fetch_recs_async, false, _}, #qry{fsm_ref = FsmRef, stmt_result = StmtResult, contain_rowid = ContainRowId} = State) ->
-    #stmtResult{stmtRef = StmtRef, stmtCols = Clms} = StmtResult,
-    case StmtRef:fetch_rows(?DEFAULT_ROW_SIZE) of
-        {{rows, Rows}, Completed} ->
-            try FsmRef:rows({fix_row_format(StmtRef, Rows, Clms, ContainRowId), Completed}) of
+handle_cast({fetch_recs_async, false, _}, #qry{fsm_ref = FsmRef, stmt_result = StmtResult,
+        contain_rowid = ContainRowId, connection = Connection} = State) ->
+    #stmtResult{stmtRef = Statement, stmtCols = Clms} = StmtResult,
+    ?Info("Cha"),
+    Res = dpi_fetch_rows(Connection, Statement, ?DEFAULT_ROW_SIZE),
+    ?Info("fetch rows result ~p", [Res]),
+    case Res of
+        {error, Error} -> FsmRef:rows({error, Error});
+        {error, _DpiNifFile, _Line, #{message := Msg}} -> FsmRef:rows({error, Msg});
+        {Rows, Completed} when is_list(Rows), is_boolean(Completed) ->
+            try FsmRef:rows({fix_row_format(Statement, Rows, Clms, ContainRowId), Completed}) of
                 ok -> ok
             catch
                 _Class:Result ->
                     FsmRef:rows({error, Result})
-            end;
-        {error, Error} ->
-            FsmRef:rows({error, Error})
+            end
     end,
     {noreply, State};
 handle_cast({fetch_push, NRows, Target}, #qry{fsm_ref = FsmRef, stmt_result = StmtResult} = State) ->
@@ -194,7 +203,8 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #qry{stmt_result = #stmtResult{stmtRef = undefined}}) -> ok;
-terminate(_Reason, #qry{stmt_result = #stmtResult{stmtRef = StmtRef}}) -> StmtRef:close().
+terminate(_Reason, #qry{connection = Connection, stmt_result = #stmtResult{stmtRef = Stmt}}) ->
+    dpi_stmt_close(Connection, Stmt).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -268,14 +278,10 @@ expand_star(Flds, _Forms) -> Flds.
 qualify_star([]) -> [];
 qualify_star([Table | Rest]) -> [qualify_field(Table, "*") | qualify_star(Rest)].
 
-bind_exec_stmt(_Conn, Stmt, undefined) ->
-    io:format("bind exec pass undefined ~p~n",[0]),
-    Cols = dpi:stmt_execute(Stmt, []),
-    io:format("bind exec pass undefined ~p~n",[1]), 
-    {cols,Cols},        %% the real value
-    {cols,[{<<"123">>,'SQLT_NUM',22,0,-127},        %% hardcoded
-               {<<"ROWID">>,'SQLT_RDD',8,0,0}]};
-
+bind_exec_stmt(Conn, Stmt, undefined) ->
+    Res = dpi_stmt_execute(Conn, Stmt),
+    ?Info("bind exec pass undefined result ~p", [Res]),
+    Res;
 bind_exec_stmt(Conn, Stmt, {BindsMeta, BindVal}) ->
     io:format("bind exec pass ~p~n",[0]),
     BindVars = bind_vars(Conn, Stmt, BindsMeta),
@@ -358,36 +364,38 @@ execute_with_binds(Stmt, BindVars, Binds) ->
 
 run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
-    case dpi:safe(fun() ->
-        dpi:conn_prepareStmt(Connection, false, NewSql, <<"">>)
-    end) of
-        {error, Error} when Sql =/= NewSql ->
-            ?Error("Got error executing the new query ~p", [Error]), %% TODO: Remove.
-            case dpi:safe(fun() ->
-                dpi:conn_prepareStmt(Connection, false, Sql, <<"">>)
-            end) of
-                {error, Error} ->
-                    ?Error("Got error executing original query ~p", [Error]),
-                    error(Error);
-                Statement ->
-                    ?Info("The statement ~p", [Statement]),
-                    StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+    case dpi_conn_prepareStmt(Connection, NewSql) of
+        Statement when is_reference (Statement) ->
+            ?Info("The statement ~p", [Statement]),
+            StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
+            ?Info("The statement exec result ~p", [StmtExecResult]),
+            case dpi_stmt_getInfo(Connection, Statement) of
+                #{isQuery := true} ->
+                    result_exec_query(
+                        StmtExecResult,
+                        Statement,
+                        Sql,
+                        Binds,
+                        NewSql,
+                        RowIdAdded,
+                        Connection,
+                        SelectSections
+                    );
+                GetInfo ->
+                    ?Info("Result get_info stmt ~p", [GetInfo]),
                     result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
             end;
-        {error, Error} ->
-            ?Info("Got error query the same... ~p", [Error]),
-            error(Error);
-        Statement ->
-            StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
-            result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
-                             SelectSections)
+        {error, _DpiNifFile, _Line, #{message := Msg}} -> error(list_to_binary(Msg));
+        Error -> error(Error)
     end.
 
-result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Connection, SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[1]),
-    io:format("RowIdAdded: ~p~n",[RowIdAdded]),
-    io:format("Clms: ~p~n",[Clms]),
+result_exec_query(NColumns, Statement, _Sql, _Binds, NewSql, RowIdAdded, Connection,
+                    SelectSections) when is_integer(NColumns), NColumns > 0 ->
+    ?Info("result_exec_stmt col count ~p", [NColumns]),
+    ?Info("RowIdAdded: ~p", [RowIdAdded]),
+    Clms = dpi_query_columns(Connection, Statement, NColumns),
+    ?Info("Clms: ~p", [Clms]),
     if
         RowIdAdded -> % ROWID is hidden from columns
             [_|ColumnsR] = lists:reverse(Clms),
@@ -414,6 +422,40 @@ result_exec_stmt({cols, Clms}, Statement, _Sql, _Binds, NewSql, RowIdAdded, _Con
                     , sortFun  = SortFun
                     , sortSpec = []}
      , RowIdAdded};
+result_exec_query(RowIdError, Stmt, Sql, Binds, NewSql, _RowIdAdded, Connection,
+        SelectSections) when Sql =/= NewSql ->
+    ?Info("result_exec_stmt ~p~n",[RowIdError]),
+    ?Debug("RowIdError ~p", [RowIdError]),
+    dpi:stmt_release(Stmt),
+    io:format("Conn args: [~p] [~p] [~p] [~p] conna args end~n", [Connection, false, Sql, <<"">>]),
+    case dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of
+        {error, {ErrorId,Msg}} ->
+            error({ErrorId,Msg});
+        Statement1 ->
+            io:format("res pass ~p~n", [1]),
+            Bind_exec_res = bind_exec_stmt(Connection, Statement1, Binds),
+             io:format("Bind exec res: ~p~n", [Bind_exec_res]),
+            case Bind_exec_res of
+                {cols, Clms} ->
+                    Fields = proplists:get_value(fields, SelectSections, []),
+                    io:format("res pass ~p~n", [2]),
+                    NewClms = cols_to_rec(Clms, Fields),
+                    io:format("res pass ~p~n", [3]),
+                    SortFun = build_sort_fun(Sql, NewClms),
+                    io:format("res pass ~p~n", [4]),
+                    {ok, #stmtResult{ stmtCols = NewClms, stmtRef  = Statement1, sortFun  = SortFun,
+                                      rowFun   = fun({{}, Row}) ->
+                                                         translate_datatype(Statement1, tuple_to_list(Row), NewClms)
+                                                 end, sortSpec = []}
+                     , false};
+                Error ->
+                    dpi:stmt_release(Statement1),
+                    error(Error)
+            end
+    end;
+result_exec_query(Error, Stmt, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
+    result_exec_error(Error, Stmt, Connection).
+
 result_exec_stmt({rowids, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
     io:format("result_exec_stmt v~p~n",[2]),
     dpi:stmt_release(Statement),
@@ -433,7 +475,7 @@ result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql
         _ ->
             {ok, [{Var, Val}]}
     end;
-result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
+result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
     io:format("result_exec_stmt v~p~n",[5]),
     NewValues =
     lists:foldl(
@@ -446,42 +488,16 @@ result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _Ne
       end, [], Values),
     ?Debug("Values ~p", [Values]),
     ?Debug("Binds ~p", [Binds]),
-    dpi:stmt_release(Statement),
-    {ok, NewValues};
-result_exec_stmt(Error, Statement, Sql, _Binds, Sql, _RowIdAdded, _Connection, _SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[6]),
-    dpi:stmt_release(Statement),
-    error(Error);
-result_exec_stmt(RowIdError, Statement, Sql, Binds, _NewSql, _RowIdAdded, Connection, SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[7]),
-    ?Debug("RowIdError ~p", [RowIdError]),
-    dpi:stmt_release(Statement),
-    io:format("Conn args: [~p] [~p] [~p] [~p] conna args end~n", [Connection, false, Sql, <<"">>]),
-    case dpi:conn_prepareStmt(Connection, false, Sql, <<"">>) of
-        {error, {ErrorId,Msg}} ->
-            error({ErrorId,Msg});
-        Statement1 ->
-            io:format("res pass ~p~n", [1]),
-            Bind_exec_res = bind_exec_stmt(Connection, Statement1, Binds),
-             io:format("Bind exec res: ~p~n", [Bind_exec_res]),
-            case Bind_exec_res of
-                {cols, Clms} ->
-                    Fields = proplists:get_value(fields, SelectSections, []),
-                    io:format("res pass ~p~n", [2]),
-                    NewClms = cols_to_rec(Clms, Fields),
-                    io:format("res pass ~p~n", [3]),
-                    SortFun = build_sort_fun(Sql, NewClms),
-                    io:format("res pass ~p~n", [4]),
-                    {ok, #stmtResult{ stmtCols = NewClms, stmtRef  = Statement1, sortFun  = SortFun,
-                                      rowFun   = fun({{}, Row}) ->
-                                                         translate_datatype(Statement, tuple_to_list(Row), NewClms)
-                                                 end, sortSpec = []}
-                     , false};
-                Error ->
-                    dpi:stmt_release(Statement),
-                    error(Error)
-            end
-    end.
+    dpi_stmt_close(Connection, Statement),
+    {ok, NewValues}.
+
+result_exec_error({error, _DpiNifFile, _Line, #{message := Msg}}, Statement, Connection) ->
+    dpi_stmt_close(Connection, Statement),
+    error(list_to_binary(Msg));
+result_exec_error(Result, Statement, Connection) ->
+    ?Error("Result with unrecognized format ~p", [Result]),
+    dpi_stmt_close(Connection, Statement),
+    error(Result).
 
 -spec create_rowfun(boolean(), list(), term()) -> fun().
 create_rowfun(RowIdAdded, Clms, Stmt) ->
@@ -645,58 +661,20 @@ build_full_map(Clms) ->
 build_sort_fun(_Sql, _Clms) ->
     fun(_Row) -> {} end.
 
--spec cols_to_rec([tuple()], list()) -> [#stmtCol{}].
+%#{name => "DUMMY",nullOk => true,typeInfo => #{clientSizeInBytes => 1,dbSizeInBytes => 1,defaultNativeTypeNum => 'DPI_NATIVE_TYPE_BYTES',fsPrecision => 0,objectType => featureNotImplemented,ociTypeCode => 1,oracleTypeNum => 'DPI_ORACLE_TYPE_VARCHAR',precision => 0,scale => 0,sizeInChars => 1}}
+
+-spec cols_to_rec([map()], list()) -> [#stmtCol{}].
 cols_to_rec([], _) -> [];
-cols_to_rec([{Alias,'SQLT_NUM',_Len,63,-127}|Rest], Fields) ->
-    %% Real type
-    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
-    [#stmtCol{ tag = Tag
-             , alias = Alias
-             , type = 'SQLT_NUM'
-             , len = 19
-             , prec = dynamic
-             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
-cols_to_rec([{Alias,'SQLT_NUM',_Len,_Prec,-127}|Rest], Fields) ->
-    %% Float type or unlimited number.
-    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
-    [#stmtCol{ tag = Tag
-             , alias = Alias
-             , type = 'SQLT_NUM'
-             , len = 38
-             , prec = dynamic
-             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
-cols_to_rec([{Alias,'SQLT_NUM',_Len,0,0}|Rest], Fields) ->
-    [#stmtCol{ tag = Alias
-             , alias = Alias
-             , type = 'SQLT_NUM'
-             , len = 38
-             , prec = dynamic
-             , readonly = true} | cols_to_rec(Rest, Fields)];
-cols_to_rec([{Alias,'SQLT_NUM',_Len,_Prec,Scale}|Rest], Fields) ->
-    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
-    [#stmtCol{ tag = Tag
-             , alias = Alias
-             , type = 'SQLT_NUM'
-             , len = undefined
-             , prec = Scale
-             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
-cols_to_rec([{Alias,'SQLT_TIMESTAMP',Len,_Prec,Scale}|Rest], Fields) ->
-    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
-    [#stmtCol{ tag = Tag
-             , alias = Alias
-             , type = 'SQLT_TIMESTAMP'
-             , len = Len
-             , prec = Scale
-             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
-cols_to_rec([{Alias,'SQLT_TIMESTAMP_TZ',Len,_Prec,Scale}|Rest], Fields) ->
-    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
-    [#stmtCol{ tag = Tag
-             , alias = Alias
-             , type = 'SQLT_TIMESTAMP_TZ'
-             , len = Len
-             , prec = Scale
-             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
-cols_to_rec([{Alias,Type,Len,Prec,_Scale}|Rest], Fields) ->
+cols_to_rec([#{
+    name := AliasStr,
+    typeInfo := #{
+        oracleTypeNum := Type, 
+        clientSizeInBytes := Len,
+        precision := Prec
+    }} | Rest],
+    Fields
+) ->
+    Alias = list_to_binary(AliasStr),
     {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
     [#stmtCol{ tag = Tag
              , alias = Alias
@@ -800,7 +778,7 @@ fix_format(Stmt, [{Pointer, Size} | RestRow], [#stmtCol{type = 'SQLT_CLOB'} | Re
 fix_format(Stmt, [Cell | RestRow], [#stmtCol{} | RestCols]) ->
     [Cell | fix_format(Stmt, RestRow, RestCols)].
 
--spec run_table_cmd(tuple(), atom(), binary()) -> ok | {error, term()}. %% %% !! Fix this to properly use statments.
+-spec run_table_cmd(tuple(), atom(), binary()) -> ok | {error, term()}. %% %% !! Fix this to properly use statements.
 run_table_cmd({oci_port, _, _} = _Connection, restore_table, _TableName) -> {error, <<"Command not implemented">>};
 run_table_cmd({oci_port, _, _} = _Connection, snapshot_table, _TableName) -> {error, <<"Command not implemented">>};
 run_table_cmd({oci_port, _, _} = Connection, truncate_table, TableName) ->
@@ -854,3 +832,51 @@ parse_sql({ok, [{{'begin procedure', _},_}]}, Sql) ->
     {NewSql, NewSql, <<"">>, false, []};
 parse_sql(_UnsuportedSql, Sql) ->
     {Sql, Sql, <<"">>, false, []}.
+
+
+dpi_conn_prepareStmt(#odpi_conn{node = Node, connection = Conn}, Sql) ->
+    dpi:safe(Node, fun() -> dpi:conn_prepareStmt(Conn, false, Sql, <<"">>) end).
+
+dpi_stmt_execute(#odpi_conn{node = Node, connection = Conn}, Stmt) ->
+    dpi:safe(Node, fun() ->
+        Result = dpi:stmt_execute(Stmt, []),
+        ok = dpi:conn_commit(Conn), % Commit automatically for any dderl query.
+        Result
+    end).
+
+dpi_stmt_getInfo(#odpi_conn{node = Node}, Stmt) ->
+    dpi:safe(Node, fun() -> dpi:stmt_getInfo(Stmt) end).
+
+dpi_stmt_close(#odpi_conn{node = Node}, Stmt) ->
+    dpi:safe(Node, fun() -> dpi:stmt_close(Stmt) end).
+
+% This is not directly dpi but seems this is the best place to declare as it is rpc...
+dpi_query_columns(#odpi_conn{node = Node}, Stmt, NColumns) ->
+    dpi:safe(Node, fun() -> get_column_info(Stmt, 1, NColumns) end).
+
+get_column_info(_Stmt, ColIdx, Limit) when ColIdx > Limit -> [];
+get_column_info(Stmt, ColIdx, Limit) ->
+    QueryInfoRef = dpi:stmt_getQueryInfo(Stmt, ColIdx),
+    QueryInfo = dpi:queryInfo_get(QueryInfoRef),
+    dpi:queryInfo_delete(QueryInfoRef),
+    [QueryInfo | get_column_info(Stmt, ColIdx + 1, Limit)].
+
+dpi_fetch_rows(#odpi_conn{node = Node}, Statement, BlockSize) ->
+    dpi:safe(Node, fun() -> get_rows(Statement, BlockSize, []) end).
+
+get_rows(_, 0, Acc) -> {lists:reverse(Acc), true};
+get_rows(Stmt, NRows, Acc) ->
+    case dpi:stmt_fetch(Stmt) of
+        #{found := true} ->
+            NumCols = dpi:stmt_getNumQueryColumns(Stmt),
+            get_rows(Stmt, NRows -1, [get_column_values(Stmt, 1, NumCols) | Acc]);
+        #{found := false} ->
+            {lists:reverse(Acc), false}
+    end.
+
+get_column_values(_Stmt, ColIdx, Limit) when ColIdx > Limit -> [];
+get_column_values(Stmt, ColIdx, Limit) ->
+    #{data := Data} = dpi:stmt_getQueryValue(Stmt, ColIdx),
+    Value = dpi:data_get(Data),
+    dpi:data_release(Data),
+    [Value | get_column_values(Stmt, ColIdx + 1, Limit)].
