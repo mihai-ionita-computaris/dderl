@@ -92,7 +92,6 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
 
     Method    = proplists:get_value(<<"method">>, BodyJson, <<"service">>),
     User      = proplists:get_value(<<"user">>, BodyJson, <<>>),
-    Charset = binary_to_list(get_value_empty_default(<<"charset">>, BodyJson, ?NLSLANG)),
 
     TNS = case Method of
         <<"tns">> ->
@@ -126,7 +125,8 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
             ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
             NewTnsstr
     end,
-    CommonParams = #{encoding => Charset, nencoding => Charset},
+    % Hard coded utf8 as dderl doesn't support other encodings for now.
+    CommonParams = #{encoding => "AL32UTF8", nencoding => "AL32UTF8"},
     % One slave per userid
     Node = dpi:load(build_slave_name(UserId)),
     ConnectFun = fun() ->
@@ -155,14 +155,20 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
                                     ]}])}
             end,
             Priv#priv{connections = [ConnRef | Connections]};
-        {error, {{_, _, _, #{message := Msg}} = Error, _ST}} ->
-            % Avoid printing the stacktrace as it can contain password information.
+        {error, _, _, Msg} = Error when is_list(Msg) ->
             ?Error("DB connect error ~p", [Error]),
             From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
+            dpi:unload(Node),
+            Priv;
+        {error, _, _, #{message := Msg}} = Error ->
+            ?Error("DB connect error ~p", [Error]),
+            From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
+            dpi:unload(Node),
             Priv;
         Error ->
             ?Error("DB connect error ~p", [Error]),
             From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
+            dpi:unload(Node),
             Priv
     end;
 
@@ -900,15 +906,6 @@ generate_fsmctx(#stmtResult{
                         Result
                 end
            }.
-
-get_value_empty_default(Key, Proplist, Defaults) ->
-    proplists:get_value(
-      Key, Proplist,
-      case Key of
-          <<"languange">> -> maps:get(languange, Defaults, <<>>);
-          <<"territory">> -> maps:get(territory, Defaults, <<>>);
-          <<"charset">> -> maps:get(charset, Defaults, <<>>)
-      end).
 
 build_slave_name(system) -> odpi_node_system;
 build_slave_name(UserId) when is_integer(UserId) -> 

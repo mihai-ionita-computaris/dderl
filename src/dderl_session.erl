@@ -205,7 +205,6 @@ format_status(_Opt, [_PDict, State]) -> State.
 -spec process_call({[binary()], term()}, atom(), pid(), #state{}, ipport()) -> #state{}.
 process_call({[<<"login">>], ReqData}, _Adapter, From, {SrcIp, _Port},
     #state{lock_state = LockState} = State) when LockState == locked; LockState == screensaver ->
-         io:format("Processing call ~p~n",[login]),
     #state{id = Id, conn_info = ConnInfo, old_state = OldState, xsrf_token = XSRFToken} = State,
     {ReloginTempState, NewToken, IsTimedOut} =
     if OldState /= undefined ->
@@ -673,9 +672,7 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_}, #state{sess = Sess, user_
 
 spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, SelfPid) ->
     try
-        io:format("call Adapter:process_cmd({Cmd, BodyJson}, Sess , UserId, From, CurrentPriv, SelfPid) with  ~p ~p ~p ~p ~p ~p ~p~n", [Cmd, BodyJson, Sess, UserId, From, CurrentPriv, SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
-        io:format("Pass number 1 ~p~n",[qwerttzuioplkj]),
         SelfPid ! rearm_session_idle_timer
     catch Class:Error ->
             ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
