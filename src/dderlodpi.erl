@@ -835,9 +835,11 @@ dpi_to_dderlts(#{fsecond := FSecond} = DpiTs) ->
 dpi_to_dderltstz(#{tzHourOffset := H,tzMinuteOffset := M} = DpiTsTz) ->
     iolist_to_binary([dpi_to_dderlts(DpiTsTz), format_tz(H, M)]).
 
-format_tz(TZOffset, M) when M >= 0 ->
+format_tz(TZOffset, M) when TZOffset > 0 ->
     [$+ | format_tz_internal(TZOffset, M)];
-format_tz(TZOffset, M) when M < 0 ->
+format_tz(TZOffset, M) when TZOffset =:= 0, M >= 0 ->
+    [$+ | format_tz_internal(TZOffset, M)];
+format_tz(TZOffset, M) ->
     [$- | format_tz_internal(abs(TZOffset), abs(M))].
 
 format_tz_internal(TZOffset, M) ->
