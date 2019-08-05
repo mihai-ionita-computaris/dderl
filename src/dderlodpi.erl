@@ -625,24 +625,25 @@ build_full_map(Clms) ->
               , prec = undefined }
      || {T, #stmtCol{alias = Alias, type = OciType, len = Len}} <- lists:zip(lists:seq(1,length(Clms)), Clms)].
 
-%   Tables = case lists:keyfind(from, 1, SelectSections) of
-%       {_, TNames} ->  Tabs = [imem_sql:table_qname(T) || T <- TNames],
-%                       [{_,MainTab,_}|_] = Tabs,
-%                       case lists:member(MainTab,[ddSize|?DataTypes]) of
-%                           true ->     ?ClientError({"Virtual table can only be joined", MainTab});
-%                           false ->    Tabs
-%                       end;
-%       TError ->       ?ClientError({"Invalid from in select structure", TError})
-%   end,
-%   imem_sql:column_map(Tables,[]);
-
 build_sort_fun(_Sql, _Clms) ->
     fun(_Row) -> {} end.
 
-%#{name => "DUMMY",nullOk => true,typeInfo => #{clientSizeInBytes => 1,dbSizeInBytes => 1,defaultNativeTypeNum => 'DPI_NATIVE_TYPE_BYTES',fsPrecision => 0,objectType => featureNotImplemented,ociTypeCode => 1,oracleTypeNum => 'DPI_ORACLE_TYPE_VARCHAR',precision => 0,scale => 0,sizeInChars => 1}}
-
 -spec cols_to_rec([map()], list()) -> [#stmtCol{}].
 cols_to_rec([], _) -> [];
+cols_to_rec([#{
+    name := AliasStr,
+    typeInfo := #{
+        oracleTypeNum := Type,
+        fsPrecision := FsPrec
+    }} | Rest], Fields
+) when Type =:= 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'; Type =:= 'DPI_ORACLE_TYPE_TIMESTAMP' ->
+    Alias = list_to_binary(AliasStr),
+    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
+    [#stmtCol{ tag = Tag
+             , alias = Alias
+             , type = Type
+             , prec = FsPrec
+             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
 cols_to_rec([#{
     name := AliasStr,
     typeInfo := #{
@@ -667,16 +668,14 @@ get_alias([#stmtCol{alias = A} | Rest]) ->
     [A | get_alias(Rest)].
 
 translate_datatype(_Stmt, [], []) -> [];
-translate_datatype(Stmt, [<<>> | RestRow], [#stmtCol{} | RestCols]) ->
+translate_datatype(Stmt, [Null | RestRow], [#stmtCol{} | RestCols]) when Null =:= null; Null =:= <<>>->
     [<<>> | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'SQLT_TIMESTAMP_TZ'} | RestCols]) ->
-    [dderloci_utils:ora_to_dderltstz(R) | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'SQLT_TIMESTAMP'} | RestCols]) ->
-    [dderloci_utils:ora_to_dderlts(R) | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'SQLT_DAT'} | RestCols]) ->
-    [dderloci_utils:ora_to_dderltime(R) | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [null | RestRow], [#stmtCol{type = 'SQLT_NUM'} | RestCols]) ->
-    [<<>> | translate_datatype(Stmt, RestRow, RestCols)];
+translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'} | RestCols]) ->
+    [dpi_to_dderltstz(R) | translate_datatype(Stmt, RestRow, RestCols)];
+translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP'} | RestCols]) ->
+    [dpi_to_dderlts(R) | translate_datatype(Stmt, RestRow, RestCols)];
+translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_DATE'} | RestCols]) ->
+    [dpi_to_dderltime(R) | translate_datatype(Stmt, RestRow, RestCols)];
 translate_datatype(Stmt, [Mantissa | RestRow], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
     %% Float / Real type or unlimited numbers.
     Number = dderloci_utils:clean_dynamic_prec(imem_datatype:decimal_to_io(Mantissa, Scale)),
@@ -811,6 +810,50 @@ parse_sql({ok, [{{'begin procedure', _},_}]}, Sql) ->
 parse_sql(_UnsuportedSql, Sql) ->
     {Sql, Sql, <<"">>, false, []}.
 
+
+%%%% Dpi data helper functions
+
+dpi_to_dderltime(#{day := Day, month := Month, year := Year, hour := Hour, minute := Min, second := Sec}) ->
+    iolist_to_binary([
+        pad(Day), ".",
+        pad(Month), ".",
+        integer_to_list(Year), " ",
+        pad(Hour), ":",
+        pad(Min), ":", pad(Sec)
+    ]).
+
+dpi_to_dderlts(#{fsecond := FSecond} = DpiTs) ->
+    ListFracSecs = case integer_to_list(FSecond) of
+        NeedPad when length(NeedPad) < 9 -> pad(NeedPad, 9);
+        FullPrec -> FullPrec
+    end,
+    case string:trim(ListFracSecs, trailing, "0") of
+        [] -> dpi_to_dderltime(DpiTs);
+        FracSecs -> iolist_to_binary([dpi_to_dderltime(DpiTs), $., FracSecs])
+    end.
+
+dpi_to_dderltstz(#{tzHourOffset := H,tzMinuteOffset := M} = DpiTsTz) ->
+    iolist_to_binary([dpi_to_dderlts(DpiTsTz), format_tz(H, M)]).
+
+format_tz(TZOffset, M) when M >= 0 ->
+    [$+ | format_tz_internal(TZOffset, M)];
+format_tz(TZOffset, M) when M < 0 ->
+    [$- | format_tz_internal(abs(TZOffset), abs(M))].
+
+format_tz_internal(TZOffset, M) ->
+    [pad_tz(TZOffset), integer_to_list(TZOffset), $:, pad_tz(M), integer_to_list(M)].
+
+pad_tz(TzDigit) when TzDigit < 10 -> [$0];
+pad_tz(_) -> [].
+
+pad(ListValue, Size) ->
+    lists:duplicate(Size - length(ListValue), $0) ++ ListValue.
+
+pad(IntValue) ->
+    Value = integer_to_list(IntValue),
+    pad(Value, 2).
+
+%%%% Dpi safe functions executed on dpi slave node
 
 dpi_conn_prepareStmt(#odpi_conn{node = Node, connection = Conn}, Sql) ->
     dpi:safe(Node, fun() -> dpi:conn_prepareStmt(Conn, false, Sql, <<"">>) end).
