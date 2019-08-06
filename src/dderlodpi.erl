@@ -647,6 +647,49 @@ cols_to_rec([#{
 cols_to_rec([#{
     name := AliasStr,
     typeInfo := #{
+        oracleTypeNum := 'DPI_ORACLE_TYPE_NUMBER',
+        precision := 63,
+        scale := -127 
+    }} | Rest], Fields
+) ->
+    Alias = list_to_binary(AliasStr),
+    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
+    [#stmtCol{ tag = Tag
+             , alias = Alias
+             , type = 'DPI_ORACLE_TYPE_NUMBER'
+             , len = 19
+             , prec = dynamic
+             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
+cols_to_rec([#{
+    name := AliasStr,
+    typeInfo := #{
+        oracleTypeNum := 'DPI_ORACLE_TYPE_NUMBER',
+        scale := -127 
+    }} | Rest], Fields
+) ->
+    Alias = list_to_binary(AliasStr),
+    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
+    [#stmtCol{ tag = Tag
+             , alias = Alias
+             , type = 'DPI_ORACLE_TYPE_NUMBER'
+             , len = 38
+             , prec = dynamic
+             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
+cols_to_rec([#{
+    name := AliasStr,
+    typeInfo := #{
+        oracleTypeNum := Type
+    }} | Rest], Fields
+) when Type =:= 'DPI_ORACLE_TYPE_NATIVE_DOUBLE'; Type =:= 'DPI_ORACLE_TYPE_NATIVE_FLOAT' ->
+    Alias = list_to_binary(AliasStr),
+    {Tag, ReadOnly, NewFields} = find_original_field(Alias, Fields),
+    [#stmtCol{ tag = Tag
+             , alias = Alias
+             , type = Type
+             , readonly = ReadOnly} | cols_to_rec(Rest, NewFields)];
+cols_to_rec([#{
+    name := AliasStr,
+    typeInfo := #{
         oracleTypeNum := Type, 
         clientSizeInBytes := Len,
         precision := Prec
@@ -676,13 +719,12 @@ translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMEST
     [dpi_to_dderlts(R) | translate_datatype(Stmt, RestRow, RestCols)];
 translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_DATE'} | RestCols]) ->
     [dpi_to_dderltime(R) | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [Mantissa | RestRow], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
-    %% Float / Real type or unlimited numbers.
-    Number = dderloci_utils:clean_dynamic_prec(imem_datatype:decimal_to_io(Mantissa, Scale)),
-    [Number | translate_datatype(Stmt, RestRow, RestCols)];
-translate_datatype(Stmt, [Mantissa | RestRow], [#stmtCol{type = 'SQLT_NUM', prec = Prec} | RestCols]) ->
-    Number = imem_datatype:decimal_to_io(Mantissa, Prec),
-    [Number | translate_datatype(Stmt, RestRow, RestCols)];
+translate_datatype(Stmt, [Number | RestRow], [#stmtCol{type = Type} | RestCols]) when
+        Type =:= 'DPI_ORACLE_TYPE_NUMBER';
+        Type =:= 'DPI_ORACLE_TYPE_NATIVE_DOUBLE';
+        Type =:= 'DPI_ORACLE_TYPE_NATIVE_FLOAT' ->
+    Result = dderloci_utils:clean_dynamic_prec(float_to_binary(Number, [{decimals,20}, compact])),
+    [Result | translate_datatype(Stmt, RestRow, RestCols)];
 translate_datatype(Stmt, [{_Pointer, Size, Path, Name} | RestRow], [#stmtCol{type = 'SQLT_BFILEE'} | RestCols]) ->
     SizeBin = integer_to_binary(Size),
     [<<Path/binary, $#, Name/binary, 32, $[, SizeBin/binary, $]>> | translate_datatype(Stmt, RestRow, RestCols)];

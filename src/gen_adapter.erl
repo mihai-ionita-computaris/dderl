@@ -756,6 +756,34 @@ build_column_json([C|Cols], JCols, Counter) ->
         'SQLT_LVC' -> Type = <<"text">>;
         'SQLT_CLOB'-> Type = <<"text">>;
         'SQLT_VST' -> Type = <<"text">>;
+%% Oracle odpi types:
+        'DPI_ORACLE_TYPE_VARCHAR' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_NVARCHAR' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_CHAR' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_NCHAR' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_ROWID' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_RAW' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_NATIVE_FLOAT' -> Type = <<"numeric">>;
+        'DPI_ORACLE_TYPE_NATIVE_DOUBLE' -> Type = <<"numeric">>;
+        'DPI_ORACLE_TYPE_NATIVE_INT' -> Type = <<"numeric">>;
+        'DPI_ORACLE_TYPE_NATIVE_UINT' -> Type = <<"numeric">>;
+        'DPI_ORACLE_TYPE_NUMBER' -> Type = <<"numeric">>;
+        'DPI_ORACLE_TYPE_DATE' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_TIMESTAMP' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_TIMESTAMP_TZ' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_TIMESTAMP_LTZ' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_INTERVAL_DS' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_INTERVAL_YM' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_CLOB' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_NCLOB' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_BLOB' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_BFILE' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_STMT' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_BOOLEAN' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_OBJECT' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_LONG_VARCHAR' -> Type = <<"text">>;
+        'DPI_ORACLE_TYPE_LONG_RAW' -> Type = <<"text">>;
+%% Unknown types:
         _ -> Type = <<"undefined">>
     end,
     JC = [{<<"id">>, Nm1},
