@@ -5,20 +5,35 @@
 
 %% API
 -export([
-    exec/3,                 %   ✓
-    exec/4,                 %   ✓
-    change_password/4,      %   ✓
+    exec/3,                 % TODO: Cover all this functions with test cases.
+    exec/4,                 %
+    change_password/4,      %
     add_fsm/2,              %
     fetch_recs_async/3,     %
     fetch_close/1,          %
     filter_and_sort/6,      %
     close/1,                %
     close_port/1,           %
-    run_table_cmd/3,        %   ✓
+    run_table_cmd/3,        %
     cols_to_rec/2,          %
     get_alias/1,            %
     fix_row_format/4,       %
-    create_rowfun/3         %
+    create_rowfun/3
+]).
+
+%% helper functions for odpi_stmt
+-export([
+    dpi_conn_prepareStmt/2,
+    dpi_conn_commit/1,
+    dpi_conn_rollback/1,
+    dpi_conn_newVar/2,
+    dpi_stmt_bindByName/4,
+    dpi_stmt_execute/3,
+    dpi_stmt_executeMany/4,
+    dpi_var_set_many/3,
+    dpi_stmt_close/2,
+    dpi_var_release/2,
+    dpi_data_release/2
 ]).
 
 %% gen_server callbacks
@@ -723,7 +738,7 @@ translate_datatype(Stmt, [Number | RestRow], [#stmtCol{type = Type} | RestCols])
         Type =:= 'DPI_ORACLE_TYPE_NUMBER';
         Type =:= 'DPI_ORACLE_TYPE_NATIVE_DOUBLE';
         Type =:= 'DPI_ORACLE_TYPE_NATIVE_FLOAT' ->
-    Result = dderloci_utils:clean_dynamic_prec(float_to_binary(Number, [{decimals,20}, compact])),
+    Result = dderloci_utils:clean_dynamic_prec(number_to_binary(Number)),
     [Result | translate_datatype(Stmt, RestRow, RestCols)];
 translate_datatype(Stmt, [{_Pointer, Size, Path, Name} | RestRow], [#stmtCol{type = 'SQLT_BFILEE'} | RestCols]) ->
     SizeBin = integer_to_binary(Size),
@@ -798,19 +813,24 @@ fix_format(Stmt, [Cell | RestRow], [#stmtCol{} | RestCols]) ->
     [Cell | fix_format(Stmt, RestRow, RestCols)].
 
 -spec run_table_cmd(tuple(), atom(), binary()) -> ok | {error, term()}. %% %% !! Fix this to properly use statements.
-run_table_cmd({oci_port, _, _} = _Connection, restore_table, _TableName) -> {error, <<"Command not implemented">>};
-run_table_cmd({oci_port, _, _} = _Connection, snapshot_table, _TableName) -> {error, <<"Command not implemented">>};
-run_table_cmd({oci_port, _, _} = Connection, truncate_table, TableName) ->
+run_table_cmd(#odpi_conn{}, restore_table, _TableName) -> {error, <<"Command not implemented">>};
+run_table_cmd(#odpi_conn{}, snapshot_table, _TableName) -> {error, <<"Command not implemented">>};
+run_table_cmd(#odpi_conn{} = Connection, truncate_table, TableName) ->
     run_table_cmd(Connection, iolist_to_binary([<<"truncate table ">>, TableName]));
-run_table_cmd({oci_port, _, _} = Connection, drop_table, TableName) ->
+run_table_cmd(#odpi_conn{} = Connection, drop_table, TableName) ->
     run_table_cmd(Connection, iolist_to_binary([<<"drop table ">>, TableName])).
 
 -spec run_table_cmd(reference(), binary()) -> ok | {error, term()}.
 run_table_cmd(Connection, SqlCmd) ->
-    Stmt = dpi:conn_prepareStmt(Connection, false, SqlCmd, <<"">>),
-    dpi:stmt_execute(Stmt, []),
-    dpi:stmt_release(Stmt),
-    ok.
+    Stmt = dpi_conn_prepareStmt(Connection, SqlCmd),
+    Result = case dpi_stmt_execute(Connection, Stmt) of
+        0 -> ok; % 0 rows available is the success response.
+        Error ->
+            ?Error("Error running table command ~p, result ~p", [SqlCmd, Error]),
+            {error, <<"Table command failed">>}
+    end,
+    dpi_stmt_close(Connection, Stmt),
+    Result.
 
 -spec find_original_field(binary(), list()) -> {binary(), boolean(), list()}.
 find_original_field(Alias, []) -> {Alias, false, []};
@@ -851,7 +871,6 @@ parse_sql({ok, [{{'begin procedure', _},_}]}, Sql) ->
     {NewSql, NewSql, <<"">>, false, []};
 parse_sql(_UnsuportedSql, Sql) ->
     {Sql, Sql, <<"">>, false, []}.
-
 
 %%%% Dpi data helper functions
 
@@ -897,23 +916,57 @@ pad(IntValue) ->
     Value = integer_to_list(IntValue),
     pad(Value, 2).
 
+number_to_binary(Int) when is_integer(Int) -> integer_to_binary(Int);
+number_to_binary(Float) -> float_to_binary(Float, [{decimals,20}, compact]).
+
 %%%% Dpi safe functions executed on dpi slave node
 
 dpi_conn_prepareStmt(#odpi_conn{node = Node, connection = Conn}, Sql) ->
     dpi:safe(Node, fun() -> dpi:conn_prepareStmt(Conn, false, Sql, <<"">>) end).
 
-dpi_stmt_execute(#odpi_conn{node = Node, connection = Conn}, Stmt) ->
+dpi_conn_commit(#odpi_conn{node = Node, connection = Conn}) ->
+    dpi:safe(Node, fun() -> dpi:conn_commit(Conn) end).
+
+dpi_conn_rollback(#odpi_conn{node = Node, connection = Conn}) ->
+    dpi:safe(Node, fun() -> dpi:conn_rollback(Conn) end).
+
+%% TODO: Probably oracle type should be given...
+dpi_conn_newVar(#odpi_conn{node = Node, connection = Conn}, Count) ->
     dpi:safe(Node, fun() ->
-        Result = dpi:stmt_execute(Stmt, []),
-        ok = dpi:conn_commit(Conn), % Commit automatically for any dderl query.
-        Result
+        #{var := Var, data := DataList} =
+            dpi:conn_newVar(
+                Conn, 'DPI_ORACLE_TYPE_VARCHAR', 'DPI_NATIVE_TYPE_BYTES', Count, 4000,
+                false, false, null
+            ),
+        {Var, DataList}
     end).
+
+dpi_stmt_bindByName(#odpi_conn{node = Node}, Stmt, Name, Var) ->
+    dpi:safe(Node, fun() -> dpi:stmt_bindByName(Stmt, Name, Var) end).
+
+dpi_stmt_execute(Connection, Stmt) ->
+    % Commit automatically for any dderl queries.
+    dpi_stmt_execute(Connection, Stmt, ['DPI_MODE_EXEC_COMMIT_ON_SUCCESS']).
+
+dpi_stmt_execute(#odpi_conn{node = Node}, Stmt, Mode) ->
+    dpi:safe(Node, fun() -> dpi:stmt_execute(Stmt, Mode) end).
+
+dpi_stmt_executeMany(#odpi_conn{node = Node}, Stmt, Count, Mode) ->
+    dpi:safe(Node, fun() -> dpi:stmt_executeMany(Stmt, Mode, Count) end).
 
 dpi_stmt_getInfo(#odpi_conn{node = Node}, Stmt) ->
     dpi:safe(Node, fun() -> dpi:stmt_getInfo(Stmt) end).
 
 dpi_stmt_close(#odpi_conn{node = Node}, Stmt) ->
     dpi:safe(Node, fun() -> dpi:stmt_close(Stmt) end).
+
+dpi_var_release(#odpi_conn{node = Node}, Var) ->
+    dpi:safe(Node, fun() -> dpi:var_release(Var) end).
+
+dpi_data_release(#odpi_conn{node = Node}, DataList) when is_list(DataList) ->
+    dpi:safe(Node, fun() -> [dpi:data_release(Data) || Data <- DataList] end);
+dpi_data_release(#odpi_conn{node = Node}, Data) ->
+    dpi:safe(Node, fun() -> dpi:data_release(Data) end).
 
 % This is not directly dpi but seems this is the best place to declare as it is rpc...
 dpi_query_columns(#odpi_conn{node = Node}, Stmt, NColumns) ->
@@ -945,3 +998,19 @@ get_column_values(Stmt, ColIdx, Limit) ->
     Value = dpi:data_get(Data),
     dpi:data_release(Data),
     [Value | get_column_values(Stmt, ColIdx + 1, Limit)].
+
+% Helper function to avoid many rpc calls when binding a list of variables.
+dpi_var_set_many(#odpi_conn{node = Node}, Vars, Rows) ->
+    dpi:safe(Node, fun() -> var_bind_many(Vars, Rows, 0) end).
+
+var_bind_many(_Vars, [], _) -> ok;
+var_bind_many(Vars, [Row | Rest], Idx) ->
+    ok = var_bind_row(Vars, Row, Idx),
+    var_bind_many(Vars, Rest, Idx + 1).
+
+var_bind_row([], [], _Idx) -> ok;
+var_bind_row([], _Row, _Idx) -> {error, <<"Bind variables does not match the given data">>};
+var_bind_row(_Vars, [], _Idx) -> {error, <<"Bind variables does not match the given data">>};
+var_bind_row([Var | RestVars], [Bytes | RestRow], Idx) ->
+    ok = dpi:var_setFromBytes(Var, Idx, Bytes),
+    var_bind_row(RestVars, RestRow, Idx).

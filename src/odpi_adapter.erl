@@ -897,11 +897,11 @@ generate_fsmctx(#stmtResult{
            ,update_cursor_prepare_fun =
                 fun(ChangeList) ->
                         ?Debug("The stmtref ~p, the table name: ~p and the change list: ~n~p", [StmtRef, TableName, ChangeList]),
-                        dderloci_stmt:prepare(TableName, ChangeList, Connection, Clms)
+                        dderlodpi_stmt:prepare(TableName, ChangeList, Connection, Clms)
                 end
            ,update_cursor_execute_fun =
                 fun(_Lock, PrepStmt) ->
-                        Result = dderloci_stmt:execute(PrepStmt),
+                        Result = dderlodpi_stmt:execute(PrepStmt),
                         ?Debug("The result from the exec ~p", [Result]),
                         Result
                 end
