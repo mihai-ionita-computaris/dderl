@@ -974,9 +974,7 @@ dpi_query_columns(#odpi_conn{node = Node}, Stmt, NColumns) ->
 
 get_column_info(_Stmt, ColIdx, Limit) when ColIdx > Limit -> [];
 get_column_info(Stmt, ColIdx, Limit) ->
-    QueryInfoRef = dpi:stmt_getQueryInfo(Stmt, ColIdx),
-    QueryInfo = dpi:queryInfo_get(QueryInfoRef),
-    dpi:queryInfo_delete(QueryInfoRef),
+    QueryInfo = dpi:stmt_getQueryInfo(Stmt, ColIdx),
     [QueryInfo | get_column_info(Stmt, ColIdx + 1, Limit)].
 
 dpi_fetch_rows(#odpi_conn{node = Node}, Statement, BlockSize) ->
