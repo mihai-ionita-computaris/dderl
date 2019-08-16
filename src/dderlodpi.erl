@@ -33,7 +33,12 @@
     dpi_var_set_many/3,
     dpi_stmt_close/2,
     dpi_var_release/2,
-    dpi_data_release/2
+    dpi_data_release/2,
+%% data conversion
+    dpi_to_dderltime/1,
+    dpi_to_dderlts/1,
+    dpi_to_dderltstz/1,
+    number_to_binary/1
 ]).
 
 %% gen_server callbacks
@@ -726,7 +731,9 @@ get_alias([#stmtCol{alias = A} | Rest]) ->
     [A | get_alias(Rest)].
 
 translate_datatype(_Stmt, [], []) -> [];
-translate_datatype(Stmt, [Null | RestRow], [#stmtCol{} | RestCols]) when Null =:= null; Null =:= <<>>->
+translate_datatype(Stmt, [Bin | RestRow], [#stmtCol{} | RestCols]) when is_binary(Bin) ->
+    [Bin | translate_datatype(Stmt, RestRow, RestCols)];
+translate_datatype(Stmt, [null | RestRow], [#stmtCol{} | RestCols]) ->
     [<<>> | translate_datatype(Stmt, RestRow, RestCols)];
 translate_datatype(Stmt, [R | RestRow], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'} | RestCols]) ->
     [dpi_to_dderltstz(R) | translate_datatype(Stmt, RestRow, RestCols)];

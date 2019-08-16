@@ -51,9 +51,9 @@ handle_call(execute, _From, #stmt{columns = Columns, connection = Connection} = 
     try
         case process_delete(Connection, Stmt#stmt.del_stmt, Stmt#stmt.del_rows, Columns) of
             {ok, DeleteChangeList} ->
-                case process_update(Stmt#stmt.upd_stmt, Stmt#stmt.upd_rows, Columns) of
+                case process_update(Connection, Stmt#stmt.upd_stmt, Stmt#stmt.upd_rows, Columns) of
                     {ok, UpdateChangeList} ->
-                        case process_insert(Stmt#stmt.ins_stmt, Stmt#stmt.ins_rows, Columns) of
+                        case process_insert(Connection, Stmt#stmt.ins_stmt, Stmt#stmt.ins_rows, Columns) of
                             {ok, InsertChangeList} ->
                                 dderlodpi:dpi_conn_commit(Connection),
                                 {stop, normal, DeleteChangeList ++ UpdateChangeList ++ InsertChangeList, Stmt};
@@ -135,21 +135,20 @@ create_stmts([{del, DelList} | Rest], TableName, Connection, Columns, ResultStmt
 create_stmts([{upd, []} | Rest], TableName, Connection, Columns, ResultStmt) ->
     create_stmts(Rest, TableName, Connection, Columns, ResultStmt);
 create_stmts([{upd, UpdList} | Rest], TableName, Connection, Columns, ResultStmts) ->
-    [{ModifiedCols, _Rows} | RestUpdList] = UpdList,
+    [{ModifiedCols, Rows} | RestUpdList] = UpdList,
     FilterColumns = filter_columns(ModifiedCols, Columns),
     UpdVars = create_upd_vars(FilterColumns),
-    % TODO: use where part to do optimistic locking.
-    % WhereVars = create_where_vars(Columns),
     Sql = iolist_to_binary([<<"update ">>, table_name(TableName), " set ", UpdVars, " where ", alias_name(TableName), ".ROWID = :IDENTIFIER"]),
+    ?Info("The update sql ~p and the length rows ~p", [Sql, length(Rows)]), %% TODO: Remove
     case dderlodpi:dpi_conn_prepareStmt(Connection, Sql) of
-        Stmt when is_reference(Stmt) -> %% TODO: Implement from here down...
-            BindTypes = [{<<":IDENTIFIER">>, 'SQLT_STR'} | create_bind_types(FilterColumns)],
-            Stmt:bind_vars(BindTypes),
-            case proplists:get_value(upd, ResultStmts) of
-                undefined ->
-                    NewResultStmts = [{upd, [Stmt]} | ResultStmts];
-                UpdtStmts ->
-                    NewResultStmts = lists:keyreplace(upd, 1, ResultStmts, {upd, UpdtStmts ++ [Stmt]})
+        Stmt when is_reference(Stmt) ->
+            {RowIdVar, RowIdData} = dderlodpi:dpi_conn_newVar(Connection, length(Rows)),
+            ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, <<"IDENTIFIER">>, RowIdVar),
+            {Vars, DataLists} = create_and_bind_vars(Connection, Stmt, FilterColumns, length(Rows)),
+            StmtBind = #binds{stmt = Stmt, var = [RowIdVar | Vars], data = [RowIdData | DataLists]},
+            NewResultStmts = case proplists:get_value(upd, ResultStmts) of
+                undefined -> [{upd, [StmtBind]} | ResultStmts];
+                UpdtStmts -> lists:keyreplace(upd, 1, ResultStmts, {upd, UpdtStmts ++ [StmtBind]})
             end,
             create_stmts([{upd, RestUpdList} | Rest], TableName, Connection, Columns, NewResultStmts);
         Error ->
@@ -159,32 +158,25 @@ create_stmts([{upd, UpdList} | Rest], TableName, Connection, Columns, ResultStmt
     end;
 create_stmts([{ins, []} | Rest], TableName, Connection, Columns, ResultStmt) ->
     create_stmts(Rest, TableName, Connection, Columns, ResultStmt);
-%[{{1,2,3},[{row,{{}},undefined,2,ins,[<<"3.33">>,<<"22">>,<<"23">>]}]},
-%{{1,3},
-% [{row,{{}},undefined,3,ins,[<<"4.0">>,<<>>,<<"231">>]},
-%  {row,{{}},undefined,4,ins,[<<"87.4">>,<<>>,<<"44">>]}]},
-%{{2,3},
-% [{row,{{}},undefined,5,ins,[<<>>,<<"12">>,<<"55">>]},
-%  {row,{{}},undefined,6,ins,[<<>>,<<"33">>,<<"22">>]}]}]
 create_stmts([{ins, InsList} | Rest], TableName, Connection, Columns, ResultStmts) ->
-    [{NonEmptyCols, _Rows} | RestInsList] = InsList,
-    InsColumns = ["(", create_ins_columns(filter_columns(NonEmptyCols, Columns)), ")"],
-    Sql = iolist_to_binary([<<"insert into ">>, table_name(TableName), " ", InsColumns, " values ", "(", create_ins_vars(filter_columns(NonEmptyCols, Columns)), ")"]),
-    case Connection:prep_sql(Sql) of
-        {error, {_ErrorCode, ErrorMsg}} ->
-            %%TODO: ?Error...
-            close_stmts(Connection, ResultStmts),
-            {error, ErrorMsg};
-        Stmt ->
-            BindTypes = create_bind_types(filter_columns(NonEmptyCols, Columns)),
-            Stmt:bind_vars(BindTypes),
-            case proplists:get_value(ins, ResultStmts) of
-                undefined ->
-                    NewResultStmts = [{ins, [Stmt]} | ResultStmts];
-                InsStmts ->
-                    NewResultStmts = lists:keyreplace(ins, 1, ResultStmts, {ins, InsStmts ++ [Stmt]})
+    [{NonEmptyCols, Rows} | RestInsList] = InsList,
+    FilterColumns = filter_columns(NonEmptyCols, Columns),
+    InsColumns = ["(", create_ins_columns(FilterColumns), ")"],
+    Sql = iolist_to_binary([<<"insert into ">>, table_name(TableName), " ", InsColumns, " values ", "(", create_ins_vars(FilterColumns), ")"]),
+    ?Info("The insert sql ~p", [Sql]), %% TODO: Remove
+    case dderlodpi:dpi_conn_prepareStmt(Connection, Sql) of
+        Stmt when is_reference(Stmt) ->
+            {Vars, DataLists} = create_and_bind_vars(Connection, Stmt, FilterColumns, length(Rows)),
+            StmtBind = #binds{stmt = Stmt, var = Vars, data = DataLists},
+            NewResultStmts = case proplists:get_value(ins, ResultStmts) of
+                undefined -> [{ins, [StmtBind]} | ResultStmts];
+                InsStmts -> lists:keyreplace(ins, 1, ResultStmts, {ins, InsStmts ++ [StmtBind]})
             end,
-            create_stmts([{ins, RestInsList} | Rest], TableName, Connection, Columns, NewResultStmts)
+            create_stmts([{ins, RestInsList} | Rest], TableName, Connection, Columns, NewResultStmts);
+        Error ->
+            ?Error("Error preparing insert stmt: ~p", [Error]),
+            close_stmts(Connection, ResultStmts),
+            {error, iolist_to_binary(["Unable to prepare stmt: ", Sql])}
     end.
 
 -spec process_delete(term(), term(), list(), list()) -> {ok, list()} | {error, term()}.
@@ -201,15 +193,14 @@ process_delete(Connection, #binds{stmt = Stmt, var = Var}, Rows, _Columns) ->
             {ok, ChangedKeys}
     end.
 
--spec process_update(list(), list(), [#stmtCol{}]) -> {ok, list()} | {error, term()}.
-process_update(undefined, [], _Columns) -> {ok, []};
-process_update([], [], _Colums) -> {ok, []};
-process_update([PrepStmt | RestStmts], [{ModifiedCols, Rows} | RestRows], Columns) ->
-    %% TODO: No need to filter the rows for optimistic locking...
+-spec process_update(term(), list(), list(), [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+process_update(_Conn, undefined, [], _Columns) -> {ok, []};
+process_update(_Conn, [], [], _Colums) -> {ok, []};
+process_update(Connection, [PrepStmt | RestStmts], [{ModifiedCols, Rows} | RestRows], Columns) ->
     FilterRows = [Row#row{values = filter_columns(ModifiedCols, Row#row.values)} || Row <- Rows],
-    case process_one_update(PrepStmt, FilterRows, filter_columns(ModifiedCols, Columns), Rows, Columns) of
+    case process_one_update(Connection, PrepStmt, FilterRows, Rows, Columns) of
         {ok, ChangedKeys} ->
-            case process_update(RestStmts, RestRows, Columns) of
+            case process_update(Connection, RestStmts, RestRows, Columns) of
                {ok, RestChangedKeys} ->
                     {ok, ChangedKeys ++ RestChangedKeys};
                ErrorRest ->
@@ -219,33 +210,28 @@ process_update([PrepStmt | RestStmts], [{ModifiedCols, Rows} | RestRows], Column
             Error
     end.
 
--spec process_one_update(term(), [#row{}], [#stmtCol{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
-process_one_update(PrepStmt, FilterRows, FilterColumns, Rows, Columns) ->
-    %% TODO: Implement updates using the old values on the where clause, (optimistic locking).
-    RowsToUpdate = [list_to_tuple(create_bind_vals([Row#row.id | Row#row.values], [#stmtCol{type = 'SQLT_STR'} | FilterColumns])) || Row <- FilterRows],
-    case PrepStmt:exec_stmt(RowsToUpdate, ?NoCommit) of
-        {rowids, RowIds} ->
-            case check_rowid(RowIds, Rows) of
-                true->
-                    ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#stmtCol{type = 'SQLT_STR'}]))}} || Row <- Rows],
-                    {ok, ChangedKeys};
-                false ->
-                    {error, <<"Unknown error updating the rows.">>};
-                long_rowid ->
-                    {error, <<"Updating tables with universal rowids is not supported yet.">>}
-            end;
-        {error, {_ErrorCode, ErrorMsg}}->
-            {error, ErrorMsg}
+-spec process_one_update(term(), term(), [#row{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+process_one_update(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows, Columns) ->
+    RowsToUpdate = [[Row#row.id | Row#row.values] || Row <- FilterRows],
+    ?Info("The rows to update ~p", [RowsToUpdate]), %% TODO: Remove
+    ok = dderlodpi:dpi_var_set_many(Connection, Var, RowsToUpdate),
+    case dderlodpi:dpi_stmt_executeMany(Connection, Stmt, length(RowsToUpdate), []) of
+        {error, _DpiNifFile, _Line, #{message := Msg}} ->
+            {error, list_to_binary(Msg)};
+        ok ->
+            ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#stmtCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} || Row <- Rows],
+            ?Info("The changed keys ~p", [ChangedKeys]),
+            {ok, ChangedKeys}
     end.
 
--spec process_insert(term(), list(), list()) -> {ok, list()} | {error, term()}.
-process_insert(undefined, [], _Columns) -> {ok, []};
-process_insert([], [], _Columns) -> {ok, []};
-process_insert([PrepStmt | RestStmts], [{NonEmptyCols, Rows} | RestRows], Columns) ->
+-spec process_insert(term(), term(), list(), list()) -> {ok, list()} | {error, term()}.
+process_insert(_Conn, undefined, [], _Columns) -> {ok, []};
+process_insert(_Conn, [], [], _Columns) -> {ok, []};
+process_insert(Connection, [PrepStmt | RestStmts], [{NonEmptyCols, Rows} | RestRows], Columns) ->
     FilterRows = [Row#row{values = filter_columns(NonEmptyCols, Row#row.values)} || Row <- Rows],
-    case process_one_insert(PrepStmt, FilterRows, filter_columns(NonEmptyCols, Columns), Rows, Columns) of
+    case process_one_insert(Connection, PrepStmt, FilterRows, Rows, Columns) of
         {ok, ChangedKeys} ->
-            case process_insert(RestStmts, RestRows, Columns) of
+            case process_insert(Connection, RestStmts, RestRows, Columns) of
                 {ok, RestChangedKeys} ->
                     {ok, ChangedKeys ++ RestChangedKeys};
                 ErrorRest ->
@@ -255,25 +241,21 @@ process_insert([PrepStmt | RestStmts], [{NonEmptyCols, Rows} | RestRows], Column
             Error
     end.
 
--spec process_one_insert(term(), [#row{}], [#stmtCol{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
-process_one_insert(PrepStmt, FilterRows, FilterColumns, Rows, Columns) ->
-    RowsToInsert = [list_to_tuple(create_bind_vals(Row#row.values, FilterColumns)) || Row <- FilterRows],
-    case PrepStmt:exec_stmt(RowsToInsert, ?NoCommit) of
-        {rowids, RowIds} ->
-            if
-                length(RowIds) =:= length(RowsToInsert) ->
-                    case inserted_changed_keys(RowIds, Rows, Columns) of
-                        {error, ErrorMsg} ->
-                            {error, ErrorMsg};
-                        ChangedKeys ->
-                            {ok, ChangedKeys}
-                    end;
-                true ->
-                    %% TODO: What is a good message here ?
-                    {error, <<"Error inserting the rows.">>}
-            end;
-        {error, {_ErrorCode, ErrorMsg}}->
-            {error, ErrorMsg}
+-spec process_one_insert(term(), term(), [#row{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+process_one_insert(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows, Columns) ->
+    RowsToInsert = [Row#row.values || Row <- FilterRows],
+    ok = dderlodpi:dpi_var_set_many(Connection, Var, RowsToInsert),
+    case dderlodpi:dpi_stmt_executeMany(Connection, Stmt, length(RowsToInsert), []) of
+        {error, _DpiNifFile, _Line, #{message := Msg}} ->
+            {error, list_to_binary(Msg)};
+        ok ->
+            %% TODO: Fix this by getting the rowid from stmt
+            case inserted_changed_keys([], Rows, Columns) of
+                {error, ErrorMsg} ->
+                    {error, ErrorMsg};
+                ChangedKeys ->
+                    {ok, ChangedKeys}
+            end
     end.
 
 -spec split_changes(list()) -> {[#row{}], [#row{}], [#row{}]}.
@@ -311,10 +293,6 @@ filter_columns(ModifiedCols, Columns) ->
 create_upd_vars([#stmtCol{} = Col]) -> [Col#stmtCol.tag, " = :", "\"", Col#stmtCol.tag, "\""];
 create_upd_vars([#stmtCol{} = Col | Rest]) -> [Col#stmtCol.tag, " = :", "\"", Col#stmtCol.tag, "\"", ", ", create_upd_vars(Rest)].
 
-create_bind_types([]) -> [];
-create_bind_types([#stmtCol{} = Col | Rest]) ->
-    [{iolist_to_binary([":", "\"", Col#stmtCol.tag, "\""]), bind_types_map(Col#stmtCol.type)} | create_bind_types(Rest)].
-
 create_ins_columns([#stmtCol{} = Col]) -> [Col#stmtCol.tag];
 create_ins_columns([#stmtCol{} = Col | Rest]) -> [Col#stmtCol.tag, ", ", create_ins_columns(Rest)].
 
@@ -322,47 +300,28 @@ create_ins_vars([#stmtCol{} = Col]) -> [":", "\"", Col#stmtCol.tag, "\""];
 create_ins_vars([#stmtCol{} = Col | Rest]) -> [":", "\"", Col#stmtCol.tag, "\"", ", ", create_ins_vars(Rest)].
 
 create_changedkey_vals([], _Cols) -> [];
-create_changedkey_vals([<<>> | Rest], [#stmtCol{} | RestCols]) ->
-    [<<>> | create_changedkey_vals(Rest, RestCols)];
-create_changedkey_vals([Value | Rest], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
-    Number = imem_datatype:io_to_decimal(Value, undefined, Scale),
-    [Number | create_changedkey_vals(Rest, RestCols)];
-create_changedkey_vals([Value | Rest], [#stmtCol{type = Type, len = Len, prec = Prec} | RestCols]) ->
-    FormattedValue = case Type of
-        'SQLT_DAT' -> dderloci_utils:dderltime_to_ora(Value);
-        'SQLT_TIMESTAMP' -> dderloci_utils:dderlts_to_ora(Value);
-        'SQLT_TIMESTAMP_TZ' -> dderloci_utils:dderltstz_to_ora(Value);
-        'SQLT_NUM' -> imem_datatype:io_to_decimal(Value, Len, Prec);
-        'SQLT_BIN' -> imem_datatype:binary_to_io(Value);
-        _ -> Value 
-    end,
-    [FormattedValue | create_changedkey_vals(Rest, RestCols)].
+create_changedkey_vals([Val | Rest], [#stmtCol{} | RestCols]) ->
+    [Val | create_changedkey_vals(Rest, RestCols)].
 
-create_bind_vals([], _Cols) -> [];
-create_bind_vals([<<>> | Rest], [_Col | RestCols]) ->
-    [<<>> | create_bind_vals(Rest, RestCols)];
-create_bind_vals([Value | Rest], [#stmtCol{type = Type, len = Len} | RestCols]) ->
-    FormattedValue = case Type of
-        'SQLT_DAT' -> dderloci_utils:dderltime_to_ora(Value);
-        'SQLT_TIMESTAMP' -> dderloci_utils:dderlts_to_ora(Value);
-        'SQLT_TIMESTAMP_TZ' -> dderloci_utils:dderltstz_to_ora(Value);
-        'SQLT_NUM' -> dderloci_utils:oranumber_encode(Value);
-        'SQLT_BIN' -> imem_datatype:io_to_binary(Value, Len);
-        _ -> Value
-    end,
-    [FormattedValue | create_bind_vals(Rest, RestCols)].
-
-bind_types_map('SQLT_NUM') -> 'SQLT_VNU';
-%% There is no really support for this types at the moment so use string to send the data...
-bind_types_map('SQLT_INT') -> 'SQLT_STR';
-bind_types_map('SQLT_FLT') -> 'SQLT_STR';
-bind_types_map('SQLT_CLOB') -> 'SQLT_STR';
-bind_types_map(Type) -> Type.
+%% TODO: Evaluate if this is necessary as data conversion seems dangerous and a refresh always recommended.
+%create_changedkey_vals([Value | Rest], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
+%    Number = imem_datatype:io_to_decimal(Value, undefined, Scale),
+%    [Number | create_changedkey_vals(Rest, RestCols)];
+%create_changedkey_vals([Value | Rest], [#stmtCol{type = Type, len = Len, prec = Prec} | RestCols]) ->
+%    FormattedValue = case Type of
+%        'SQLT_DAT' -> dderloci_utils:dderltime_to_ora(Value);
+%        'SQLT_TIMESTAMP' -> dderloci_utils:dderlts_to_ora(Value);
+%        'SQLT_TIMESTAMP_TZ' -> dderloci_utils:dderltstz_to_ora(Value);
+%        'SQLT_NUM' -> imem_datatype:io_to_decimal(Value, Len, Prec);
+%        'SQLT_BIN' -> imem_datatype:binary_to_io(Value);
+%        _ -> Value 
+%    end,
+%    [FormattedValue | create_changedkey_vals(Rest, RestCols)].
 
 -spec inserted_changed_keys([binary()], [#row{}], list()) -> [tuple()].
 inserted_changed_keys([], [], _) -> [];
 inserted_changed_keys([RowId | RestRowIds], [Row | RestRows], Columns) ->
-    [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [RowId], Columns ++ [#stmtCol{type = 'SQLT_STR'}]))}} | inserted_changed_keys(RestRowIds, RestRows, Columns)];
+    [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [RowId], Columns ++ [#stmtCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} | inserted_changed_keys(RestRowIds, RestRows, Columns)];
 inserted_changed_keys(_, _, _) ->
     {error, <<"Invalid row keys returned by the oracle driver">>}.
 
@@ -398,47 +357,40 @@ get_modified_cols(#row{index = Index, values = Values}, Columns) ->
 get_modified_cols([], [], [], _) -> [];
 get_modified_cols([_Orig | RestOrig], [_Value | RestValues], [#stmtCol{readonly=true} | Columns], Pos) ->
     get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-get_modified_cols([<<>> | RestOrig], [<<>> | RestValues], [#stmtCol{} | Columns], Pos) ->
-    get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-get_modified_cols([<<>> | RestOrig], [_Value | RestValues], [#stmtCol{} | Columns], Pos) ->
-    [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)];
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'SQLT_DAT'} | Columns], Pos) ->
-    case dderloci_utils:ora_to_dderltime(OrigVal) of
+get_modified_cols([Null | RestOrig], [Value | RestValues], [#stmtCol{} | Columns], Pos) when 
+        Null =:= null; Null =:= <<>> ->
+    case Value of
+        <<>> -> get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
+        _ -> [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
+    end;
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_DATE'} | Columns], Pos) ->
+    case dderlodpi:dpi_to_dderltime(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'SQLT_TIMESTAMP'} | Columns], Pos) ->
-    case dderloci_utils:ora_to_dderlts(OrigVal) of
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP'} | Columns], Pos) ->
+    case dderlodpi:dpi_to_dderlts(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'SQLT_TIMESTAMP_TZ'} | Columns], Pos) ->
-    case dderloci_utils:ora_to_dderltstz(OrigVal) of
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'} | Columns], Pos) ->
+    case dderlodpi:dpi_to_dderltstz(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([null | RestOrig], [<<>> | RestValues], [#stmtCol{type = 'SQLT_NUM'} | Columns], Pos) ->
-    get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-get_modified_cols([null | RestOrig], [_Value | RestValues], [#stmtCol{type = 'SQLT_NUM'} | Columns], Pos) ->
-    [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)];
-get_modified_cols([Mantissa | RestOrig], [Value | RestValues], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | Columns], Pos) ->
-    Number = dderloci_utils:clean_dynamic_prec(imem_datatype:decimal_to_io(Mantissa, Scale)),
+get_modified_cols([Number | RestOrig], [Value | RestValues], [#stmtCol{type = Type} | Columns], Pos) when
+        Type =:= 'DPI_ORACLE_TYPE_NUMBER';
+        Type =:= 'DPI_ORACLE_TYPE_NATIVE_DOUBLE';
+        Type =:= 'DPI_ORACLE_TYPE_NATIVE_FLOAT' ->
+    Result = dderloci_utils:clean_dynamic_prec(dderlodpi:number_to_binary(Number)),
     if
-        Number =:= Value ->
-            get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-        true ->
-            [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
-    end;
-get_modified_cols([Mantissa | RestOrig], [Value | RestValues], [#stmtCol{type = 'SQLT_NUM', prec = Prec} | Columns], Pos) ->
-    Number = imem_datatype:decimal_to_io(Mantissa, Prec),
-    if
-        Number =:= Value ->
+        Result =:= Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         true ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
@@ -484,26 +436,19 @@ close_stmts(Conn, [Binds | RestBinds]) ->
     close_stmts(Conn, RestBinds).
 
 -spec close_and_release_binds(reference(), #bind{}) -> ok.
+close_and_release_binds(Conn, #binds{stmt = Stmt, var = VarList, data = DataList}) when is_list(VarList) ->
+    dderlodpi:dpi_stmt_close(Conn, Stmt),
+    [dderlodpi:dpi_var_release(Conn, Var) || Var <- VarList],
+    [dderlodpi:dpi_data_release(Conn, Data) || Data <- DataList];
 close_and_release_binds(Conn, #binds{stmt = Stmt, var = Var, data = Data}) ->
     dderlodpi:dpi_stmt_close(Conn, Stmt),
     dderlodpi:dpi_var_release(Conn, Var),
     dderlodpi:dpi_data_release(Conn, Data).
 
--spec check_rowid([binary()], [#row{}]) -> true | false | long_rowid.
-check_rowid(RowIds, Rows) when length(RowIds) =:= length(Rows) ->
-    check_member(RowIds, Rows);
-check_rowid(_RowIds, _Rows) ->
-    false.
-
--spec check_member([binary()], [#row{}]) -> true | false | long_rowid.
-check_member(_, []) -> true;
-check_member(RowIds, [Row | RestRows]) ->
-    case lists:member(Row#row.id, RowIds) of
-        true ->
-            check_member(RowIds, RestRows);
-        false ->
-            case size(Row#row.id) > 19 of
-                true -> long_rowid;
-                false -> false
-            end
-    end.
+create_and_bind_vars(_Connection, _Stmt, [], _RowsCount) -> {[], []};
+create_and_bind_vars(Connection, Stmt, [Col | RestCols], RowsCount) ->
+     % This is probably missing type for dates / timestamp...
+    {Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount),
+    ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, Col#stmtCol.tag, Var),
+    {AccVar, AccData} = create_and_bind_vars(Connection, Stmt, RestCols, RowsCount),
+    {[Var | AccVar], [Data | AccData]}.
