@@ -162,12 +162,21 @@ create_stmts([{ins, InsList} | Rest], TableName, Connection, Columns, ResultStmt
     [{NonEmptyCols, Rows} | RestInsList] = InsList,
     FilterColumns = filter_columns(NonEmptyCols, Columns),
     InsColumns = ["(", create_ins_columns(FilterColumns), ")"],
-    Sql = iolist_to_binary([<<"insert into ">>, table_name(TableName), " ", InsColumns, " values ", "(", create_ins_vars(FilterColumns), ")"]),
+    Sql = iolist_to_binary(["insert into ", table_name(TableName), " ", InsColumns, " values ", "(", create_ins_vars(FilterColumns), ") returning rowid into :IDENTIFIER"]),
     ?Info("The insert sql ~p", [Sql]), %% TODO: Remove
     case dderlodpi:dpi_conn_prepareStmt(Connection, Sql) of
         Stmt when is_reference(Stmt) ->
+            {RowIdVar, RowIdData} =
+                dderlodpi:dpi_conn_newVar(
+                    Connection,
+                    length(Rows),
+                    'DPI_ORACLE_TYPE_ROWID',
+                    'DPI_NATIVE_TYPE_ROWID',
+                    0
+                ),
+            ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, <<"IDENTIFIER">>, RowIdVar),
             {Vars, DataLists} = create_and_bind_vars(Connection, Stmt, FilterColumns, length(Rows)),
-            StmtBind = #binds{stmt = Stmt, var = Vars, data = DataLists},
+            StmtBind = #binds{stmt = Stmt, var = [RowIdVar | Vars], data = [RowIdData | DataLists]},
             NewResultStmts = case proplists:get_value(ins, ResultStmts) of
                 undefined -> [{ins, [StmtBind]} | ResultStmts];
                 InsStmts -> lists:keyreplace(ins, 1, ResultStmts, {ins, InsStmts ++ [StmtBind]})
@@ -242,19 +251,17 @@ process_insert(Connection, [PrepStmt | RestStmts], [{NonEmptyCols, Rows} | RestR
     end.
 
 -spec process_one_insert(term(), term(), [#row{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
-process_one_insert(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows, Columns) ->
+process_one_insert(Connection, #binds{stmt = Stmt, var = [RowIdVar | Vars]}, FilterRows, Rows, Columns) ->
     RowsToInsert = [Row#row.values || Row <- FilterRows],
-    ok = dderlodpi:dpi_var_set_many(Connection, Var, RowsToInsert),
+    ok = dderlodpi:dpi_var_set_many(Connection, Vars, RowsToInsert),
     case dderlodpi:dpi_stmt_executeMany(Connection, Stmt, length(RowsToInsert), []) of
         {error, _DpiNifFile, _Line, #{message := Msg}} ->
             {error, list_to_binary(Msg)};
         ok ->
-            %% TODO: Fix this by getting the rowid from stmt
-            case inserted_changed_keys([], Rows, Columns) of
-                {error, ErrorMsg} ->
-                    {error, ErrorMsg};
-                ChangedKeys ->
-                    {ok, ChangedKeys}
+            RowIds = dderlodpi:dpi_var_get_rowids(Connection, RowIdVar, length(RowsToInsert)),
+            case inserted_changed_keys(RowIds, Rows, Columns) of
+                {error, ErrorMsg} -> {error, ErrorMsg};
+                ChangedKeys -> {ok, ChangedKeys}
             end
     end.
 

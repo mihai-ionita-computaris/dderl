@@ -27,11 +27,14 @@
     dpi_conn_commit/1,
     dpi_conn_rollback/1,
     dpi_conn_newVar/2,
+    dpi_conn_newVar/5,
     dpi_stmt_bindByName/4,
     dpi_stmt_execute/3,
     dpi_stmt_executeMany/4,
     dpi_var_set_many/3,
     dpi_stmt_close/2,
+    dpi_var_getReturnedData/3,
+    dpi_var_get_rowids/3,
     dpi_var_release/2,
     dpi_data_release/2,
 %% data conversion
@@ -937,14 +940,13 @@ dpi_conn_commit(#odpi_conn{node = Node, connection = Conn}) ->
 dpi_conn_rollback(#odpi_conn{node = Node, connection = Conn}) ->
     dpi:safe(Node, fun() -> dpi:conn_rollback(Conn) end).
 
-%% TODO: Probably oracle type should be given...
-dpi_conn_newVar(#odpi_conn{node = Node, connection = Conn}, Count) ->
+dpi_conn_newVar(Connection, Count) ->
+    dpi_conn_newVar(Connection, Count, 'DPI_ORACLE_TYPE_VARCHAR', 'DPI_NATIVE_TYPE_BYTES', 4000).
+
+dpi_conn_newVar(#odpi_conn{node = Node, connection = Conn}, Count, OracleType, NativeType, Size) ->
     dpi:safe(Node, fun() ->
         #{var := Var, data := DataList} =
-            dpi:conn_newVar(
-                Conn, 'DPI_ORACLE_TYPE_VARCHAR', 'DPI_NATIVE_TYPE_BYTES', Count, 4000,
-                false, false, null
-            ),
+            dpi:conn_newVar(Conn, OracleType, NativeType, Count, Size, false, false, null),
         {Var, DataList}
     end).
 
@@ -966,6 +968,9 @@ dpi_stmt_getInfo(#odpi_conn{node = Node}, Stmt) ->
 
 dpi_stmt_close(#odpi_conn{node = Node}, Stmt) ->
     dpi:safe(Node, fun() -> dpi:stmt_close(Stmt) end).
+
+dpi_var_getReturnedData(#odpi_conn{node = Node}, Var, Index) ->
+    dpi:safe(Node, fun() -> dpi:var_getReturnedData(Var, Index) end).
 
 dpi_var_release(#odpi_conn{node = Node}, Var) ->
     dpi:safe(Node, fun() -> dpi:var_release(Var) end).
@@ -1019,3 +1024,13 @@ var_bind_row(_Vars, [], _Idx) -> {error, <<"Bind variables does not match the gi
 var_bind_row([Var | RestVars], [Bytes | RestRow], Idx) ->
     ok = dpi:var_setFromBytes(Var, Idx, Bytes),
     var_bind_row(RestVars, RestRow, Idx).
+
+dpi_var_get_rowids(#odpi_conn{node = Node}, Var, Count) when Count > 0->
+    dpi:safe(Node, fun() -> var_get_rowids(Var, Count, 0) end).
+
+var_get_rowids(_, Count, Count) -> [];
+var_get_rowids(Var, Count, Idx) ->
+    #{numElements := 1, data  := [D]} = dpi:var_getReturnedData(Var, Idx),
+    RowId = dpi:data_get(D),
+    ok = dpi:data_release(D),
+    [RowId | var_get_rowids(Var, Count, Idx + 1)].
