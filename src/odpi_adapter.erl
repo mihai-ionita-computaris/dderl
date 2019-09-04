@@ -12,7 +12,6 @@
         , get_deps/0
         , rows_limit/3
         , bind_arg_types/0
-        , logfun/1
         , add_conn_info/2
         , connect_map/1
         ]).
@@ -69,11 +68,6 @@ add_conn_extra(#ddConn{access = Access}, Conn0) when is_list(Access), is_map(Con
         Type when Type == sid; Type == <<"sid">> ->
             Conn#{method => <<"sid">>}
     end.
-
--define(LogOci(__L,__File,__Func,__Line,__Msg),
-    begin
-        lager:__L(__File, "{~s:~s:~p} ~ts", [__File,__Func,__Line,__Msg])
-    end).
 
 -spec process_cmd({[binary()], term()}, {atom(), pid()}, ddEntityId(), pid(),
                   undefined | #priv{}, pid()) -> #priv{}.
@@ -974,20 +968,6 @@ extract_rset_out([{Name, #{<<"typ">> := <<"SQLT_RSET">>, <<"dir">> := <<"out">>}
     },
     extract_rset_out(Rest, NewAcc);
 extract_rset_out(_Bids, _Acc) -> undefined.
-
-logfun({Lvl, File, Func, Line, Msg}) ->
-    case Lvl of
-        debug       -> ?LogOci(debug,File,Func,Line,Msg);
-        info        -> ?LogOci(info,File,Func,Line,Msg);
-        notice      -> ?LogOci(info,File,Func,Line,Msg);
-        error       -> ?LogOci(error,File,Func,Line,Msg);
-        warn        -> ?LogOci(warning,File,Func,Line,Msg);
-        critical    -> ?LogOci(error,File,Func,Line,Msg);
-        fatal       -> ?LogOci(error,File,Func,Line,Msg);
-        unknown     -> ?LogOci(error,File,Func,Line,Msg)
-    end;
-logfun(Log) ->
-    io:format(user, "Log in unsupported format ~p~n", [Log]).
 
 conn_close_and_destroy(#odpi_conn{context = Ctx, connection = Conn, node = Node}) ->
     dpi:safe(Node, fun() ->
