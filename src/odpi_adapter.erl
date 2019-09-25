@@ -122,7 +122,8 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
     % Hard coded utf8 as dderl doesn't support other encodings for now.
     CommonParams = #{encoding => "AL32UTF8", nencoding => "AL32UTF8"},
     % One slave per userid
-    Node = dpi:load(build_slave_name(UserId)),
+    % TODO: Error handle the result see dpi:load/1 spec
+    Node = dpi_load(build_slave_name(UserId)),
     ConnectFun = fun() ->
         Ctx = dpi:context_create(?DPI_MAJOR_VERSION, ?DPI_MINOR_VERSION),
         Conn = dpi:conn_create(Ctx, User, Password, TNS, CommonParams, #{}),
@@ -903,6 +904,16 @@ generate_fsmctx(#stmtResults{
 build_slave_name(system) -> odpi_node_system;
 build_slave_name(UserId) when is_integer(UserId) -> 
     list_to_atom("odpi_node_" ++ integer_to_list(UserId)).
+
+dpi_load(SlaveName) ->
+    Master = self(),
+    spawn_link(
+        fun() ->
+            Master ! {oranif_result, dpi:load(SlaveName)},
+            timer:sleep(infinity)
+        end
+    ),
+    receive {oranif_result, Result} -> Result end.
 
 -spec get_deps() -> [atom()].
 get_deps() -> [oranif].
