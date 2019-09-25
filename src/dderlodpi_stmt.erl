@@ -202,7 +202,7 @@ process_delete(Connection, #binds{stmt = Stmt, var = Var}, Rows, _Columns) ->
             {ok, ChangedKeys}
     end.
 
--spec process_update(term(), list(), list(), [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+-spec process_update(term(), list(), list(), [#rowCol{}]) -> {ok, list()} | {error, term()}.
 process_update(_Conn, undefined, [], _Columns) -> {ok, []};
 process_update(_Conn, [], [], _Colums) -> {ok, []};
 process_update(Connection, [PrepStmt | RestStmts], [{ModifiedCols, Rows} | RestRows], Columns) ->
@@ -219,7 +219,7 @@ process_update(Connection, [PrepStmt | RestStmts], [{ModifiedCols, Rows} | RestR
             Error
     end.
 
--spec process_one_update(term(), term(), [#row{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+-spec process_one_update(term(), term(), [#row{}], [#row{}], [#rowCol{}]) -> {ok, list()} | {error, term()}.
 process_one_update(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows, Columns) ->
     RowsToUpdate = [[Row#row.id | Row#row.values] || Row <- FilterRows],
     ?Info("The rows to update ~p", [RowsToUpdate]), %% TODO: Remove
@@ -228,7 +228,7 @@ process_one_update(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows,
         {error, _DpiNifFile, _Line, #{message := Msg}} ->
             {error, list_to_binary(Msg)};
         ok ->
-            ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#stmtCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} || Row <- Rows],
+            ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#rowCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} || Row <- Rows],
             ?Info("The changed keys ~p", [ChangedKeys]),
             {ok, ChangedKeys}
     end.
@@ -250,7 +250,7 @@ process_insert(Connection, [PrepStmt | RestStmts], [{NonEmptyCols, Rows} | RestR
             Error
     end.
 
--spec process_one_insert(term(), term(), [#row{}], [#row{}], [#stmtCol{}]) -> {ok, list()} | {error, term()}.
+-spec process_one_insert(term(), term(), [#row{}], [#row{}], [#rowCol{}]) -> {ok, list()} | {error, term()}.
 process_one_insert(Connection, #binds{stmt = Stmt, var = [RowIdVar | Vars]}, FilterRows, Rows, Columns) ->
     RowsToInsert = [Row#row.values || Row <- FilterRows],
     ok = dderlodpi:dpi_var_set_many(Connection, Vars, RowsToInsert),
@@ -297,24 +297,24 @@ filter_columns(ModifiedCols, Columns) ->
     ModifiedColsList = tuple_to_list(ModifiedCols),
     [lists:nth(ColIdx, Columns) || ColIdx <- ModifiedColsList].
 
-create_upd_vars([#stmtCol{} = Col]) -> [Col#stmtCol.tag, " = :", "\"", Col#stmtCol.tag, "\""];
-create_upd_vars([#stmtCol{} = Col | Rest]) -> [Col#stmtCol.tag, " = :", "\"", Col#stmtCol.tag, "\"", ", ", create_upd_vars(Rest)].
+create_upd_vars([#rowCol{} = Col]) -> [Col#rowCol.tag, " = :", "\"", Col#rowCol.tag, "\""];
+create_upd_vars([#rowCol{} = Col | Rest]) -> [Col#rowCol.tag, " = :", "\"", Col#rowCol.tag, "\"", ", ", create_upd_vars(Rest)].
 
-create_ins_columns([#stmtCol{} = Col]) -> [Col#stmtCol.tag];
-create_ins_columns([#stmtCol{} = Col | Rest]) -> [Col#stmtCol.tag, ", ", create_ins_columns(Rest)].
+create_ins_columns([#rowCol{} = Col]) -> [Col#rowCol.tag];
+create_ins_columns([#rowCol{} = Col | Rest]) -> [Col#rowCol.tag, ", ", create_ins_columns(Rest)].
 
-create_ins_vars([#stmtCol{} = Col]) -> [":", "\"", Col#stmtCol.tag, "\""];
-create_ins_vars([#stmtCol{} = Col | Rest]) -> [":", "\"", Col#stmtCol.tag, "\"", ", ", create_ins_vars(Rest)].
+create_ins_vars([#rowCol{} = Col]) -> [":", "\"", Col#rowCol.tag, "\""];
+create_ins_vars([#rowCol{} = Col | Rest]) -> [":", "\"", Col#rowCol.tag, "\"", ", ", create_ins_vars(Rest)].
 
 create_changedkey_vals([], _Cols) -> [];
-create_changedkey_vals([Val | Rest], [#stmtCol{} | RestCols]) ->
+create_changedkey_vals([Val | Rest], [#rowCol{} | RestCols]) ->
     [Val | create_changedkey_vals(Rest, RestCols)].
 
 %% TODO: Evaluate if this is necessary as data conversion seems dangerous and a refresh always recommended.
-%create_changedkey_vals([Value | Rest], [#stmtCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
+%create_changedkey_vals([Value | Rest], [#rowCol{type = 'SQLT_NUM', len = Scale, prec = dynamic} | RestCols]) ->
 %    Number = imem_datatype:io_to_decimal(Value, undefined, Scale),
 %    [Number | create_changedkey_vals(Rest, RestCols)];
-%create_changedkey_vals([Value | Rest], [#stmtCol{type = Type, len = Len, prec = Prec} | RestCols]) ->
+%create_changedkey_vals([Value | Rest], [#rowCol{type = Type, len = Len, prec = Prec} | RestCols]) ->
 %    FormattedValue = case Type of
 %        'SQLT_DAT' -> dderloci_utils:dderltime_to_ora(Value);
 %        'SQLT_TIMESTAMP' -> dderloci_utils:dderlts_to_ora(Value);
@@ -328,11 +328,11 @@ create_changedkey_vals([Val | Rest], [#stmtCol{} | RestCols]) ->
 -spec inserted_changed_keys([binary()], [#row{}], list()) -> [tuple()].
 inserted_changed_keys([], [], _) -> [];
 inserted_changed_keys([RowId | RestRowIds], [Row | RestRows], Columns) ->
-    [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [RowId], Columns ++ [#stmtCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} | inserted_changed_keys(RestRowIds, RestRows, Columns)];
+    [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [RowId], Columns ++ [#rowCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} | inserted_changed_keys(RestRowIds, RestRows, Columns)];
 inserted_changed_keys(_, _, _) ->
     {error, <<"Invalid row keys returned by the oracle driver">>}.
 
--spec split_by_columns_mod([#row{}], [#stmtCol{}], [{tuple(), [#row{}]}]) -> [{tuple(), [#row{}]}].
+-spec split_by_columns_mod([#row{}], [#rowCol{}], [{tuple(), [#row{}]}]) -> [{tuple(), [#row{}]}].
 split_by_columns_mod([], _Columns, Result) -> Result;
 split_by_columns_mod([#row{} = Row | RestRows], Columns, Result) ->
     case list_to_tuple(get_modified_cols(Row, Columns)) of
@@ -348,7 +348,7 @@ split_by_columns_mod([#row{} = Row | RestRows], Columns, Result) ->
     end,
     split_by_columns_mod(RestRows, Columns, NewResult).
 
--spec get_modified_cols(#row{}, [#stmtCol{}]) -> [integer()].
+-spec get_modified_cols(#row{}, [#rowCol{}]) -> [integer()].
 get_modified_cols(#row{index = Index, values = Values}, Columns) ->
     {{}, OriginalValuesTuple} = Index,
     [_RowId | OriginalValuesR] = lists:reverse(tuple_to_list(OriginalValuesTuple)),
@@ -360,38 +360,38 @@ get_modified_cols(#row{index = Index, values = Values}, Columns) ->
 
 %% TODO: This should apply the same functions used by the rowfun to avoid repeating the code here again
 %% null -> <<>> should be the default convertion .
--spec get_modified_cols([binary()], [binary()], [#stmtCol{}], pos_integer()) -> [integer()].
+-spec get_modified_cols([binary()], [binary()], [#rowCol{}], pos_integer()) -> [integer()].
 get_modified_cols([], [], [], _) -> [];
-get_modified_cols([_Orig | RestOrig], [_Value | RestValues], [#stmtCol{readonly=true} | Columns], Pos) ->
+get_modified_cols([_Orig | RestOrig], [_Value | RestValues], [#rowCol{readonly=true} | Columns], Pos) ->
     get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-get_modified_cols([Null | RestOrig], [Value | RestValues], [#stmtCol{} | Columns], Pos) when 
+get_modified_cols([Null | RestOrig], [Value | RestValues], [#rowCol{} | Columns], Pos) when 
         Null =:= null; Null =:= <<>> ->
     case Value of
         <<>> -> get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ -> [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_DATE'} | Columns], Pos) ->
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#rowCol{type = 'DPI_ORACLE_TYPE_DATE'} | Columns], Pos) ->
     case dderlodpi:dpi_to_dderltime(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP'} | Columns], Pos) ->
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#rowCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP'} | Columns], Pos) ->
     case dderlodpi:dpi_to_dderlts(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#stmtCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'} | Columns], Pos) ->
+get_modified_cols([OrigVal | RestOrig], [Value | RestValues], [#rowCol{type = 'DPI_ORACLE_TYPE_TIMESTAMP_TZ'} | Columns], Pos) ->
     case dderlodpi:dpi_to_dderltstz(OrigVal) of
         Value ->
             get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
         _ ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([Number | RestOrig], [Value | RestValues], [#stmtCol{type = Type} | Columns], Pos) when
+get_modified_cols([Number | RestOrig], [Value | RestValues], [#rowCol{type = Type} | Columns], Pos) when
         Type =:= 'DPI_ORACLE_TYPE_NUMBER';
         Type =:= 'DPI_ORACLE_TYPE_NATIVE_DOUBLE';
         Type =:= 'DPI_ORACLE_TYPE_NATIVE_FLOAT' ->
@@ -402,9 +402,9 @@ get_modified_cols([Number | RestOrig], [Value | RestValues], [#stmtCol{type = Ty
         true ->
             [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)]
     end;
-get_modified_cols([OrigVal | RestOrig], [OrigVal | RestValues], [#stmtCol{} | Columns], Pos) ->
+get_modified_cols([OrigVal | RestOrig], [OrigVal | RestValues], [#rowCol{} | Columns], Pos) ->
     get_modified_cols(RestOrig, RestValues, Columns, Pos + 1);
-get_modified_cols([_OrigVal | RestOrig], [_Value | RestValues], [#stmtCol{} | Columns], Pos) ->
+get_modified_cols([_OrigVal | RestOrig], [_Value | RestValues], [#rowCol{} | Columns], Pos) ->
     [Pos | get_modified_cols(RestOrig, RestValues, Columns, Pos + 1)].
 
 -spec split_by_non_empty([#row{}], [{tuple(),[#row{}]}]) -> [{tuple(), [#row{}]}].
@@ -456,6 +456,6 @@ create_and_bind_vars(_Connection, _Stmt, [], _RowsCount) -> {[], []};
 create_and_bind_vars(Connection, Stmt, [Col | RestCols], RowsCount) ->
      % This is probably missing type for dates / timestamp...
     {Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount),
-    ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, Col#stmtCol.tag, Var),
+    ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, Col#rowCol.tag, Var),
     {AccVar, AccData} = create_and_bind_vars(Connection, Stmt, RestCols, RowsCount),
     {[Var | AccVar], [Data | AccData]}.

@@ -521,9 +521,9 @@ process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
                                    BindVals0 -> BindVals0
                                end,
                     case dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
-                        {ok, #stmtResult{} = StmtRslt, TableName} ->
+                        {ok, #stmtResults{} = StmtRslt, TableName} ->
                             io:format("Button Pass: ~p~n", [6]),
-                            dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, FsmStmt),
+                            dderlodpi:add_fsm(StmtRslt#stmtResults.stmtRefs, FsmStmt),
                             io:format("Button Pass: ~p~n", [7]),
                             FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
                             io:format("Button Pass: ~p~n", [8]),
@@ -597,7 +597,7 @@ process_cmd({[<<"download_query">>], ReqBody}, _Sess, UserId, From, Priv, SessPi
                                 end,
     Id = proplists:get_value(<<"id">>, BodyJson, <<>>),
     case dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
-        {ok, #stmtResult{stmtCols = Clms, stmtRef = StmtRef, rowFun = RowFun}, _} ->
+        {ok, #stmtResults{rowCols = Clms, stmtRefs = StmtRef, rowFun = RowFun}, _} ->
             Columns = gen_adapter:build_column_csv(UserId, odpi, Clms),
             From ! {reply_csv, FileName, Columns, first},
             ProducerPid = spawn(fun() ->
@@ -735,13 +735,13 @@ process_query(ok, Query, BindVals, Connection, SessPid) ->
     [{<<"result">>, <<"ok">>}];
     %{cols,[{<<"123">>,'SQLT_NUM',22,0,-127},
     %           {<<"ROWID">>,'SQLT_RDD',8,0,0}]};    %% hardcoded
-process_query({ok, #stmtResult{sortSpec = SortSpec, stmtCols = Clms} = StmtRslt, TableName},
+process_query({ok, #stmtResults{sortSpec = SortSpec, rowCols = Clms} = StmtRslt, TableName},
               Query, BindVals, #odpi_conn{} = Connection, SessPid) ->
                   io:format("Process Query: ~p~n",[3]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
     StmtFsm = dderl_fsm:start(FsmCtx, SessPid),
-    dderlodpi:add_fsm(StmtRslt#stmtResult.stmtRef, StmtFsm),
+    dderlodpi:add_fsm(StmtRslt#stmtResults.stmtRefs, StmtFsm),
     ?Debug("StmtRslt ~p ~p", [Clms, SortSpec]),
     Columns = gen_adapter:build_column_json(lists:reverse(Clms)),
     JSortSpec = build_srtspec_json(SortSpec),
@@ -856,7 +856,7 @@ check_fun_vsn(Something) ->
     false.
 
 -spec check_funs(term()) -> term().
-check_funs({ok, #stmtResult{rowFun = RowFun, sortFun = SortFun} = StmtRslt, TableName}) ->
+check_funs({ok, #stmtResults{rowFun = RowFun, sortFun = SortFun} = StmtRslt, TableName}) ->
     ValidFuns = check_fun_vsn(RowFun) andalso check_fun_vsn(SortFun),
     if
         ValidFuns -> {ok, StmtRslt, TableName};
@@ -865,40 +865,39 @@ check_funs({ok, #stmtResult{rowFun = RowFun, sortFun = SortFun} = StmtRslt, Tabl
 check_funs(Error) ->
     Error.
 
--spec generate_fsmctx(#stmtResult{}, binary(), list(), tuple(), term()) -> #fsmctx{}.
-generate_fsmctx(#stmtResult{
-                  stmtCols = Clms
+-spec generate_fsmctx(#stmtResults{}, binary(), list(), tuple(), term()) -> #fsmctxs{}.
+generate_fsmctx(#stmtResults{
+                  rowCols = Clms
                 , rowFun   = RowFun
-                , stmtRef  = StmtRef
+                , stmtRefs = StmtRef
                 , sortFun  = SortFun
                 , sortSpec = SortSpec}, Query, BindVals, #odpi_conn{} = Connection, TableName) ->
-    #fsmctx{id            = "what is it?"
-           ,stmtCols      = Clms
+    #fsmctxs{rowCols      = Clms
            ,rowFun        = RowFun
            ,sortFun       = SortFun
            ,sortSpec      = SortSpec
            ,orig_qry      = Query
            ,bind_vals     = BindVals
-           ,table_name    = TableName
+           ,stmtTables    = [TableName]
            ,block_length  = ?DEFAULT_ROW_SIZE
-           ,fetch_recs_async_fun = fun(Opts, Count) -> dderlodpi:fetch_recs_async(StmtRef, Opts, Count) end
-           ,fetch_close_fun = fun() -> dderlodpi:fetch_close(StmtRef) end
-           ,stmt_close_fun  = fun() -> dderlodpi:close(StmtRef) end
-           ,filter_and_sort_fun =
-                fun(FilterSpec, SrtSpec, Cols) ->
+           ,fetch_recs_async_funs = [fun(Opts, Count) -> dderlodpi:fetch_recs_async(StmtRef, Opts, Count) end]
+           ,fetch_close_funs = [fun() -> dderlodpi:fetch_close(StmtRef) end]
+           ,stmt_close_funs  = [fun() -> dderlodpi:close(StmtRef) end]
+           ,filter_and_sort_funs =
+                [fun(FilterSpec, SrtSpec, Cols) ->
                         dderlodpi:filter_and_sort(StmtRef, Connection, FilterSpec, SrtSpec, Cols, Query)
-                end
-           ,update_cursor_prepare_fun =
-                fun(ChangeList) ->
+                end]
+           ,update_cursor_prepare_funs =
+                [fun(ChangeList) ->
                         ?Debug("The stmtref ~p, the table name: ~p and the change list: ~n~p", [StmtRef, TableName, ChangeList]),
                         dderlodpi_stmt:prepare(TableName, ChangeList, Connection, Clms)
-                end
-           ,update_cursor_execute_fun =
-                fun(_Lock, PrepStmt) ->
+                end]
+           ,update_cursor_execute_funs =
+                [fun(_Lock, PrepStmt) ->
                         Result = dderlodpi_stmt:execute(PrepStmt),
                         ?Debug("The result from the exec ~p", [Result]),
                         Result
-                end
+                end]
            }.
 
 build_slave_name(system) -> odpi_node_system;
