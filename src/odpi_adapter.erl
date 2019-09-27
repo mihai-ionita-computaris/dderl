@@ -874,6 +874,7 @@ generate_fsmctx(#stmtResults{
                 , sortFun  = SortFun
                 , sortSpec = SortSpec}, Query, BindVals, #odpi_conn{} = Connection, TableName) ->
     #fsmctxs{rowCols      = Clms
+           ,stmtRefs      = [StmtRef]
            ,rowFun        = RowFun
            ,sortFun       = SortFun
            ,sortSpec      = SortSpec
