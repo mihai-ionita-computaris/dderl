@@ -401,7 +401,8 @@ run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
                     );
                 GetInfo ->
                     ?Info("Result get_info stmt ~p", [GetInfo]),
-                    result_exec_stmt(StmtExecResult,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
+                    StmtExecResult1 = case StmtExecResult of 0-> {executed, 0}; Else -> Else end,
+                    result_exec_stmt(StmtExecResult1,Statement,Sql,Binds,NewSql,RowIdAdded,Connection,
                              SelectSections)
             end;
         {error, _DpiNifFile, _Line, #{message := Msg}} -> error(list_to_binary(Msg));
@@ -457,20 +458,20 @@ result_exec_query(RowIdError, OldStmt, Sql, Binds, NewSql, _RowIdAdded, Connecti
 result_exec_query(Error, Stmt, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
     result_exec_error(Error, Stmt, Connection).
 
-result_exec_stmt({rowids, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
+result_exec_stmt({rowids, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
     io:format("result_exec_stmt v~p~n",[2]),
-    dpi:stmt_release(Statement),
+    dpi_stmt_close(Connection, Statement),
     ok;
-result_exec_stmt({executed, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, _Connection, _SelectSections) ->
+result_exec_stmt({executed, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
     io:format("result_exec_stmt v~p~n",[3]),
-    dpi:stmt_release(Statement),
+    dpi_stmt_close(Connection, Statement),
     ok;
-result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql, false, Conn, _SelectSections) ->
+result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql, false, Connection, _SelectSections) ->
     io:format("result_exec_stmt v~p~n",[4]),
-    dpi:stmt_release(Statement),
+    dpi_stmt_close(Connection, Statement),
     case lists:keyfind(Var, 1, Binds) of
         {Var,out,'SQLT_RSET'} ->
-            result_exec_stmt(Val:exec_stmt(), Val, Sql, undefined, NewSql, false, Conn, []);
+            result_exec_stmt(Val:exec_stmt(), Val, Sql, undefined, NewSql, false, Connection, []);
         {Var,out,'SQLT_VNU'} ->
             {ok, [{Var, list_to_binary(oci_util:from_num(Val))}]};
         _ ->
