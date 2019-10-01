@@ -928,7 +928,9 @@ pad(IntValue) ->
     pad(Value, 2).
 
 number_to_binary(Int) when is_integer(Int) -> integer_to_binary(Int);
-number_to_binary(Float) -> float_to_binary(Float, [{decimals,20}, compact]).
+number_to_binary(Float) when is_float(Float) -> float_to_binary(Float, [{decimals,20}, compact]);
+number_to_binary(Binary) when is_binary(Binary) -> Binary; % already a binary, so just leave it
+number_to_binary(Else) -> io:format("ERROR: Tried to convert bad term to binary: ~p", [Else]).
 
 %%%% Dpi safe functions executed on dpi slave node
 
