@@ -547,7 +547,7 @@ process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
             end,
             io:format("Button Pass: ~p Button ~p FsmStmt ~p From ~p ~n",[16, Button, FsmStmt, From]),
             Res = FsmStmt:gui_req(button, Button, gui_resp_cb_fun(<<"button">>, FsmStmt, From)),
-            io:format("Button Pass: ~p~n", [17]),
+            io:format("Button Pass: ~p Res ~p~n", [17, Res]),
             Res
     end,
     io:format("Button Pass: ~p~n", [18]),

@@ -27,6 +27,7 @@
     dpi_conn_commit/1,
     dpi_conn_rollback/1,
     dpi_conn_newVar/2,
+    dpi_conn_newVar/3,
     dpi_conn_newVar/5,
     dpi_stmt_bindByName/4,
     dpi_stmt_execute/3,
@@ -942,6 +943,16 @@ dpi_conn_commit(#odpi_conn{node = Node, connection = Conn}) ->
 
 dpi_conn_rollback(#odpi_conn{node = Node, connection = Conn}) ->
     dpi:safe(Node, fun() -> dpi:conn_rollback(Conn) end).
+
+dpi_conn_newVar(#odpi_conn{node = Node, connection = Conn} = Connection, Count, Type) ->
+    case Type of 'DPI_ORACLE_TYPE_DATE' -> 
+    dpi:safe(Node, fun() ->
+        #{var := Var, data := DataList} =
+            dpi:conn_newVar(Conn, 'DPI_ORACLE_TYPE_DATE', 'DPI_NATIVE_TYPE_TIMESTAMP', Count, 1, false, false, null),
+        {Var, DataList}
+    end);
+
+    _Else -> dpi_conn_newVar(Connection, Count) end.
 
 dpi_conn_newVar(Connection, Count) ->
     dpi_conn_newVar(Connection, Count, 'DPI_ORACLE_TYPE_VARCHAR', 'DPI_NATIVE_TYPE_BYTES', 4000).

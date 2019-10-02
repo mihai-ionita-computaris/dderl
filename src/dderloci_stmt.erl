@@ -240,7 +240,8 @@ process_one_update(PrepStmt, FilterRows, FilterColumns, Rows, Columns) ->
             case check_rowid(RowIds, Rows) of
                 true->
                     ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#rowCol{type = 'SQLT_STR'}]))}} || Row <- Rows],
-                    {ok, ChangedKeys};
+                    io:format("changed keys: ~p~nRows to update: ~p~n", [ChangedKeys, RowsToUpdate]),
+                {ok, ChangedKeys};
                 false ->
                     {error, <<"Unknown error updating the rows.">>};
                 long_rowid ->

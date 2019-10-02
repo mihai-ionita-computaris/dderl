@@ -659,6 +659,7 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_},
     NewCurrentPriv =
         try
             TmpPriv = Adapter:process_cmd({Cmd, BodyJson, Id}, Sess, UserId, From, CurrentPriv, self()),
+            io:format("post command ~p~n",[a]),
             self() ! rearm_session_idle_timer,
             TmpPriv
         catch Class:Error ->
@@ -691,7 +692,9 @@ spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, Self
         % ?Info("UserId ~p",[UserId]),
         % ?Info("SelfPid ~p",[SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
-        SelfPid ! rearm_session_idle_timer
+        io:format("post command ~p~n",[b]),
+        SelfPid ! rearm_session_idle_timer,
+        io:format("post command ~p 2~n",[b])
     catch Class:Error ->
             ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
                    [Class, Error, BodyJson, erlang:get_stacktrace()]),
@@ -701,6 +704,7 @@ spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, Self
 spawn_gen_process_call(Adapter, From, C, BodyJson, Sess, UserId, SelfPid) ->
     try
         gen_adapter:process_cmd({[C], BodyJson}, adapter_name(Adapter), Sess, UserId, From, undefined),
+        io:format("post command ~p~n",[c]),
         SelfPid ! rearm_session_idle_timer
     catch Class:Error ->
             ?Error("Problem processing command: ~p:~p~n~p~n", [Class, Error, erlang:get_stacktrace()]),
