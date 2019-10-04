@@ -224,6 +224,7 @@ process_one_update(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows,
     RowsToUpdate = [[Row#row.id | Row#row.values] || Row <- FilterRows],
     ?Info("The rows to update ~p", [RowsToUpdate]), %% TODO: Remove
     ok = dderlodpi:dpi_var_set_many(Connection, Var, RowsToUpdate),
+    ?Info("Updated row, pass ~p", [1]), %% TODO: Remove
     case dderlodpi:dpi_stmt_executeMany(Connection, Stmt, length(RowsToUpdate), []) of
         {error, _DpiNifFile, _Line, #{message := Msg}} ->
             ?Info("ERROR: ~p ~n", [Msg]),

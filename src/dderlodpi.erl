@@ -1039,7 +1039,9 @@ dpi_var_set_many(#odpi_conn{node = Node}, Vars, Rows) ->
 
 var_bind_many(_Vars, [], _) -> ok;
 var_bind_many(Vars, [Row | Rest], Idx) ->
+    io:format("var_bind_many pass ~p Args ~p ~p ~p ~n", [0, Vars, Row, Idx]),
     ok = var_bind_row(Vars, Row, Idx),
+    io:format("var_bind_many pass ~p ~n", [1]),
     var_bind_many(Vars, Rest, Idx + 1).
 
 var_bind_row([], [], _Idx) -> ok;
@@ -1049,11 +1051,17 @@ var_bind_row([{Var, Data, Type} | RestVars], [Bytes | RestRow], Idx) ->
     io:format("var bind row. Var ~p, Restvars ~p, Bytes ~p, RestRow ~p. Idx ~p~n", [Var, RestVars, Bytes, RestRow, Idx]),
     case Type of 'DPI_ORACLE_TYPE_DATE' ->
         [Date] = Data,
-         dpi:data_setTimestamp(Date, 1990, 2, 2, 3, 3, 3, 0, 0, 0), % TODO
+        io:format("pass 0~n", []),
+        {{Y,M,D},{Hh,Mm,Ss}} = imem_datatype:io_to_datetime(Bytes),
+        io:format("pass 1~n", []),
+         dpi:data_setTimestamp(Date, Y, M, D, Hh, Mm, Ss, 0, 0, 0),
+         io:format("pass 2~n", []),
         hell;
     _Else ->
     ok = dpi:var_setFromBytes(Var, Idx, Bytes) end,
-    var_bind_row(RestVars, RestRow, Idx).
+    var_bind_row(RestVars, RestRow, Idx);
+var_bind_row([Var | RestVars], [Bytes | RestRow], Idx) ->
+    var_bind_row([{Var, undefined, undefined} | RestVars], [Bytes | RestRow], Idx).
 
 dpi_var_get_rowids(#odpi_conn{node = Node}, Var, Count) when Count > 0->
     dpi:safe(Node, fun() -> var_get_rowids(Var, Count, 0) end).
