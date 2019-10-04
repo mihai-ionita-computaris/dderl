@@ -226,7 +226,7 @@ process_one_update(Connection, #binds{stmt = Stmt, var = Var}, FilterRows, Rows,
     ok = dderlodpi:dpi_var_set_many(Connection, Var, RowsToUpdate),
     case dderlodpi:dpi_stmt_executeMany(Connection, Stmt, length(RowsToUpdate), []) of
         {error, _DpiNifFile, _Line, #{message := Msg}} ->
-            ?Info("ERROR: ~p ~p", [Msg]),
+            ?Info("ERROR: ~p ~n", [Msg]),
             {error, list_to_binary(Msg)};
         ok ->
             ChangedKeys = [{Row#row.pos, {{}, list_to_tuple(create_changedkey_vals(Row#row.values ++ [Row#row.id], Columns ++ [#rowCol{type = 'DPI_ORACLE_TYPE_ROWID'}]))}} || Row <- Rows],
@@ -457,8 +457,10 @@ create_and_bind_vars(_Connection, _Stmt, [], _RowsCount) -> {[], []};
 create_and_bind_vars(Connection, Stmt, [Col | RestCols], RowsCount) ->
      % This is probably missing type for dates / timestamp...
     io:format("create_and_bind_vars(~p, ~p, [~p | ~p], ~p)~n", [Connection, Stmt, Col, RestCols, RowsCount]),
-    %{Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount, Col#rowCol.type),
-    {Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount),
+    {Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount, Col#rowCol.type),
+    VarFmt = {Var, Data, Col#rowCol.type},
+    io:format("made var ~p Data ~p for type ~p ~n", [Var, Data, Col#rowCol.type]),
+    %{Var, Data} = dderlodpi:dpi_conn_newVar(Connection, RowsCount),
     ok = dderlodpi:dpi_stmt_bindByName(Connection, Stmt, Col#rowCol.tag, Var),
     {AccVar, AccData} = create_and_bind_vars(Connection, Stmt, RestCols, RowsCount),
-    {[Var | AccVar], [Data | AccData]}.
+    {[VarFmt | AccVar], [Data | AccData]}.

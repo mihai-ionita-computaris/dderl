@@ -433,8 +433,10 @@ result_exec_query(NColumns, Statement, _Sql, _Binds, NewSql, RowIdAdded, Connect
                                 if
                                     RowIdAdded ->
                                         [_|NewRowR] = lists:reverse(tuple_to_list(Row)),
+                                        io:format("result_exec_query RowIdAdded ~p NewRowR ~p Row ~p~n", [RowIdAdded, NewRowR, Row]),
                                         translate_datatype(Statement, lists:reverse(NewRowR), NewClms);
                                     true ->
+                                        io:format("result_exec_query RowIdAdded ~p~n", [RowIdAdded]),
                                         translate_datatype(Statement, tuple_to_list(Row), NewClms)
                                 end
                         end
@@ -504,10 +506,12 @@ result_exec_error(Result, Statement, Connection) ->
 
 -spec create_rowfun(boolean(), list(), term()) -> fun().
 create_rowfun(RowIdAdded, Clms, Stmt) ->
+    io:format("create rowfun. RowIdAdded ~p, Clms ~p. Stmt ~p~n", [RowIdAdded, Clms, Stmt]),
     fun({{}, Row}) ->
             if
                 RowIdAdded ->
                     [_|NewRowR] = lists:reverse(tuple_to_list(Row)),
+                    io:format("translate datatype Stmt ~p NewRowR ~p Clms ~p ~n", [Stmt, NewRowR, Clms]),
                     translate_datatype(Stmt, lists:reverse(NewRowR), Clms);
                 true ->
                     translate_datatype(Stmt, tuple_to_list(Row), Clms)
@@ -887,13 +891,16 @@ parse_sql(_UnsuportedSql, Sql) ->
 %%%% Dpi data helper functions
 
 dpi_to_dderltime(#{day := Day, month := Month, year := Year, hour := Hour, minute := Min, second := Sec}) ->
-    iolist_to_binary([
+    D = iolist_to_binary([
         pad(Day), ".",
         pad(Month), ".",
         integer_to_list(Year), " ",
         pad(Hour), ":",
         pad(Min), ":", pad(Sec)
-    ]).
+    ]),
+    io:format("Translated dpi_to_dderltime. Day ~p month ~p Year ~p hour ~p minute ~p sec ~p result ~p ~n",
+                                           [Day,   Month,   Year,   Hour,   Min,      Sec,   D]),
+D.
 
 dpi_to_dderlts(#{fsecond := FSecond} = DpiTs) ->
     ListFracSecs = case integer_to_list(FSecond) of
@@ -928,10 +935,13 @@ pad(IntValue) ->
     Value = integer_to_list(IntValue),
     pad(Value, 2).
 
-number_to_binary(Int) when is_integer(Int) -> integer_to_binary(Int);
-number_to_binary(Float) when is_float(Float) -> float_to_binary(Float, [{decimals,20}, compact]);
-number_to_binary(Binary) when is_binary(Binary) -> Binary; % already a binary, so just leave it
-number_to_binary(Else) -> io:format("ERROR: Tried to convert bad term to binary: ~p", [Else]).
+number_to_binary(Int) when is_integer(Int) -> io:format("Converted to binary: ~p~n", [Int]),
+integer_to_binary(Int);
+number_to_binary(Float) when is_float(Float) -> io:format("Converted to binary: ~p~n", [Float]),
+float_to_binary(Float, [{decimals,20}, compact]);
+number_to_binary(Binary) when is_binary(Binary) -> 
+    io:format("Left as binary: ~p~n", [Binary]), Binary; % already a binary, so just leave it
+number_to_binary(Else) -> io:format("ERROR: Tried to convert bad term to binary: ~p~n", [Else]).
 
 %%%% Dpi safe functions executed on dpi slave node
 
@@ -1035,8 +1045,14 @@ var_bind_many(Vars, [Row | Rest], Idx) ->
 var_bind_row([], [], _Idx) -> ok;
 var_bind_row([], _Row, _Idx) -> {error, <<"Bind variables does not match the given data">>};
 var_bind_row(_Vars, [], _Idx) -> {error, <<"Bind variables does not match the given data">>};
-var_bind_row([Var | RestVars], [Bytes | RestRow], Idx) ->
-    ok = dpi:var_setFromBytes(Var, Idx, Bytes),
+var_bind_row([{Var, Data, Type} | RestVars], [Bytes | RestRow], Idx) ->
+    io:format("var bind row. Var ~p, Restvars ~p, Bytes ~p, RestRow ~p. Idx ~p~n", [Var, RestVars, Bytes, RestRow, Idx]),
+    case Type of 'DPI_ORACLE_TYPE_DATE' ->
+        [Date] = Data,
+         dpi:data_setTimestamp(Date, 1990, 2, 2, 3, 3, 3, 0, 0, 0), % TODO
+        hell;
+    _Else ->
+    ok = dpi:var_setFromBytes(Var, Idx, Bytes) end,
     var_bind_row(RestVars, RestRow, Idx).
 
 dpi_var_get_rowids(#odpi_conn{node = Node}, Var, Count) when Count > 0->
