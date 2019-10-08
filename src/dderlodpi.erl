@@ -929,12 +929,20 @@ dpi_conn_rollback(#odpi_conn{node = Node, connection = Conn}) ->
     dpi:safe(Node, fun() -> dpi:conn_rollback(Conn) end).
 
 dpi_conn_newVar(#odpi_conn{node = Node, connection = Conn} = Connection, Count, Type) ->
-    case Type of 'DPI_ORACLE_TYPE_DATE' -> 
+
+    % encapsulates the dpi:safe call call that creates the variable and returns the variable/data
+    % because the call is the same for most variable types except the ora/dpi types
+    MakeVar = fun(NativeType, DpiType)->
     dpi:safe(Node, fun() ->
         #{var := Var, data := DataList} =
-            dpi:conn_newVar(Conn, 'DPI_ORACLE_TYPE_DATE', 'DPI_NATIVE_TYPE_TIMESTAMP', Count, 1, false, false, null),
+            dpi:conn_newVar(Conn, NativeType, DpiType, Count, 1, false, false, null),
         {Var, DataList}
-    end);
+    end) end,
+
+    case Type of    'DPI_ORACLE_TYPE_DATE' -> MakeVar('DPI_ORACLE_TYPE_DATE', 'DPI_NATIVE_TYPE_TIMESTAMP');
+                    'DPI_ORACLE_TYPE_TIMESTAMP' -> MakeVar('DPI_ORACLE_TYPE_TIMESTAMP', 'DPI_NATIVE_TYPE_TIMESTAMP');
+                    'DPI_ORACLE_TYPE_TIMESTAMP_LTZ' -> MakeVar('DPI_ORACLE_TYPE_TIMESTAMP_LTZ', 'DPI_NATIVE_TYPE_TIMESTAMP');
+                    'DPI_ORACLE_TYPE_TIMESTAMP_TZ' -> MakeVar('DPI_ORACLE_TYPE_TIMESTAMP_TZ', 'DPI_NATIVE_TYPE_TIMESTAMP');
 
     _Else -> dpi_conn_newVar(Connection, Count) end.
 
@@ -1021,7 +1029,12 @@ var_bind_row([], _Row, _Idx) -> {error, <<"Bind variables does not match the giv
 var_bind_row(_Vars, [], _Idx) -> {error, <<"Bind variables does not match the given data">>};
 var_bind_row([{Var, Data, Type} | RestVars], [Bytes | RestRow], Idx) ->
     case Type of 
-        'DPI_ORACLE_TYPE_DATE' ->
+        Atom when % dates and timestamp are the same internally so dpi:data_setTimestamp is good for all of them
+        Atom =:= 'DPI_ORACLE_TYPE_DATE';
+        Atom =:= 'DPI_ORACLE_TYPE_TIMESTAMP';
+        Atom =:= 'DPI_ORACLE_TYPE_TIMESTAMP_TZ';
+        Atom =:= 'DPI_ORACLE_TYPE_TIMESTAMP_LTZ'
+        ->
             [Date] = Data,
             {{Y,M,D},{Hh,Mm,Ss}} = imem_datatype:io_to_datetime(Bytes),
             dpi:data_setTimestamp(Date, Y, M, D, Hh, Mm, Ss, 0, 0, 0);
