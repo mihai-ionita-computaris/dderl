@@ -177,7 +177,6 @@ handle_cast({fetch_recs_async, false, _}, #qry{fsm_ref = FsmRef, stmt_result = S
         contain_rowid = ContainRowId, connection = Connection} = State) ->
     #stmtResults{stmtRefs = Statement, rowCols = Clms} = StmtResult,
     Res = dpi_fetch_rows(Connection, Statement, ?DEFAULT_ROW_SIZE),
-    ?Info("fetch rows result ~p", [Res]),
     case Res of
         {error, Error} -> FsmRef:rows({error, Error});
         {error, _DpiNifFile, _Line, #{message := Msg}} -> FsmRef:rows({error, Msg});
@@ -298,17 +297,11 @@ qualify_star([]) -> [];
 qualify_star([Table | Rest]) -> [qualify_field(Table, "*") | qualify_star(Rest)].
 
 bind_exec_stmt(Conn, Stmt, undefined) ->
-    Res = dpi_stmt_execute(Conn, Stmt),
-    ?Info("bind exec pass undefined result ~p", [Res]),
-    Res;
+    dpi_stmt_execute(Conn, Stmt);
 bind_exec_stmt(Conn, Stmt, {BindsMeta, BindVal}) ->
-    io:format("bind exec pass ~p~n",[0]),
     BindVars = bind_vars(Conn, Stmt, BindsMeta),
-    io:format("bind exec pass ~p~n",[1]),
     execute_with_binds(Stmt, BindVars, BindVal),
-    io:format("bind exec pass ~p~n",[2]),
     [ dpi:var_release(maps:get(var, B))|| B <- BindVars],
-    io:format("bind exec pass ~p~n",[3]),
 ok.
 
 oraTypeToInternal(OraType)->
@@ -385,9 +378,7 @@ run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
     %% For now only the first table is counted.
     case dpi_conn_prepareStmt(Connection, NewSql) of
         Statement when is_reference(Statement) ->
-            ?Info("The statement ~p", [Statement]),
             StmtExecResult = bind_exec_stmt(Connection, Statement, Binds),
-            ?Info("The statement exec result ~p", [StmtExecResult]),
             case dpi_stmt_getInfo(Connection, Statement) of
                 #{isQuery := true} ->
                     result_exec_query(
@@ -412,10 +403,7 @@ run_query(Connection, Sql, Binds, NewSql, RowIdAdded, SelectSections) ->
 
 result_exec_query(NColumns, Statement, _Sql, _Binds, NewSql, RowIdAdded, Connection,
                     SelectSections) when is_integer(NColumns), NColumns > 0 ->
-    ?Info("result_exec_stmt col count ~p", [NColumns]),
-    ?Info("RowIdAdded: ~p", [RowIdAdded]),
     Clms = dpi_query_columns(Connection, Statement, NColumns),
-    ?Info("Clms: ~p", [Clms]),
     if
         RowIdAdded -> % ROWID is hidden from columns
             [_|ColumnsR] = lists:reverse(Clms),
@@ -433,10 +421,8 @@ result_exec_query(NColumns, Statement, _Sql, _Binds, NewSql, RowIdAdded, Connect
                                 if
                                     RowIdAdded ->
                                         [_|NewRowR] = lists:reverse(tuple_to_list(Row)),
-                                        io:format("result_exec_query RowIdAdded ~p NewRowR ~p Row ~p~n", [RowIdAdded, NewRowR, Row]),
                                         translate_datatype(Statement, lists:reverse(NewRowR), NewClms);
                                     true ->
-                                        io:format("result_exec_query RowIdAdded ~p~n", [RowIdAdded]),
                                         translate_datatype(Statement, tuple_to_list(Row), NewClms)
                                 end
                         end
@@ -446,14 +432,11 @@ result_exec_query(NColumns, Statement, _Sql, _Binds, NewSql, RowIdAdded, Connect
      , RowIdAdded};
 result_exec_query(RowIdError, OldStmt, Sql, Binds, NewSql, _RowIdAdded, Connection,
         SelectSections) when Sql =/= NewSql ->
-    ?Info("result_exec_query rowid error ~p~n", [RowIdError]),
     ?Debug("RowIdError ~p", [RowIdError]),
     dpi_stmt_close(Connection, OldStmt),
     case dpi_conn_prepareStmt(Connection, Sql) of
         Stmt when is_reference(Stmt) ->
-            ?Info("The statement ~p", [Stmt]),
             Result = bind_exec_stmt(Connection, Stmt, Binds),
-            ?Info("The statement exec result ~p", [Result]),
             result_exec_query(Result, Stmt, Sql, Binds, Sql, false, Connection, SelectSections);
         {error, _DpiNifFile, _Line, #{message := Msg}} -> error(list_to_binary(Msg));
         Error -> error(Error)
@@ -462,15 +445,12 @@ result_exec_query(Error, Stmt, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _
     result_exec_error(Error, Stmt, Connection).
 
 result_exec_stmt({rowids, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[2]),
     dpi_stmt_close(Connection, Statement),
     ok;
 result_exec_stmt({executed, _}, Statement, _Sql, _Binds, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[3]),
     dpi_stmt_close(Connection, Statement),
     ok;
 result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql, false, Connection, _SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[4]),
     dpi_stmt_close(Connection, Statement),
     case lists:keyfind(Var, 1, Binds) of
         {Var,out,'SQLT_RSET'} ->
@@ -481,7 +461,6 @@ result_exec_stmt({executed, 1, [{Var, Val}]}, Statement, Sql, {Binds, _}, NewSql
             {ok, [{Var, Val}]}
     end;
 result_exec_stmt({executed,_,Values}, Statement, _Sql, {Binds, _BindValues}, _NewSql, _RowIdAdded, Connection, _SelectSections) ->
-    io:format("result_exec_stmt v~p~n",[5]),
     NewValues =
     lists:foldl(
       fun({Var, Val}, Acc) ->
@@ -506,12 +485,10 @@ result_exec_error(Result, Statement, Connection) ->
 
 -spec create_rowfun(boolean(), list(), term()) -> fun().
 create_rowfun(RowIdAdded, Clms, Stmt) ->
-    io:format("create rowfun. RowIdAdded ~p, Clms ~p. Stmt ~p~n", [RowIdAdded, Clms, Stmt]),
     fun({{}, Row}) ->
             if
                 RowIdAdded ->
                     [_|NewRowR] = lists:reverse(tuple_to_list(Row)),
-                    io:format("translate datatype Stmt ~p NewRowR ~p Clms ~p ~n", [Stmt, NewRowR, Clms]),
                     translate_datatype(Stmt, lists:reverse(NewRowR), Clms);
                 true ->
                     translate_datatype(Stmt, tuple_to_list(Row), Clms)
@@ -891,16 +868,13 @@ parse_sql(_UnsuportedSql, Sql) ->
 %%%% Dpi data helper functions
 
 dpi_to_dderltime(#{day := Day, month := Month, year := Year, hour := Hour, minute := Min, second := Sec}) ->
-    D = iolist_to_binary([
+    iolist_to_binary([
         pad(Day), ".",
         pad(Month), ".",
         integer_to_list(Year), " ",
         pad(Hour), ":",
         pad(Min), ":", pad(Sec)
-    ]),
-    io:format("Translated dpi_to_dderltime. Day ~p month ~p Year ~p hour ~p minute ~p sec ~p result ~p ~n",
-                                           [Day,   Month,   Year,   Hour,   Min,      Sec,   D]),
-D.
+    ]).
 
 dpi_to_dderlts(#{fsecond := FSecond} = DpiTs) ->
     ListFracSecs = case integer_to_list(FSecond) of
@@ -1039,26 +1013,21 @@ dpi_var_set_many(#odpi_conn{node = Node}, Vars, Rows) ->
 
 var_bind_many(_Vars, [], _) -> ok;
 var_bind_many(Vars, [Row | Rest], Idx) ->
-    io:format("var_bind_many pass ~p Args ~p ~p ~p ~n", [0, Vars, Row, Idx]),
     ok = var_bind_row(Vars, Row, Idx),
-    io:format("var_bind_many pass ~p ~n", [1]),
     var_bind_many(Vars, Rest, Idx + 1).
 
 var_bind_row([], [], _Idx) -> ok;
 var_bind_row([], _Row, _Idx) -> {error, <<"Bind variables does not match the given data">>};
 var_bind_row(_Vars, [], _Idx) -> {error, <<"Bind variables does not match the given data">>};
 var_bind_row([{Var, Data, Type} | RestVars], [Bytes | RestRow], Idx) ->
-    io:format("var bind row. Var ~p, Restvars ~p, Bytes ~p, RestRow ~p. Idx ~p~n", [Var, RestVars, Bytes, RestRow, Idx]),
-    case Type of 'DPI_ORACLE_TYPE_DATE' ->
-        [Date] = Data,
-        io:format("pass 0~n", []),
-        {{Y,M,D},{Hh,Mm,Ss}} = imem_datatype:io_to_datetime(Bytes),
-        io:format("pass 1~n", []),
-         dpi:data_setTimestamp(Date, Y, M, D, Hh, Mm, Ss, 0, 0, 0),
-         io:format("pass 2~n", []),
-        hell;
-    _Else ->
-    ok = dpi:var_setFromBytes(Var, Idx, Bytes) end,
+    case Type of 
+        'DPI_ORACLE_TYPE_DATE' ->
+            [Date] = Data,
+            {{Y,M,D},{Hh,Mm,Ss}} = imem_datatype:io_to_datetime(Bytes),
+            dpi:data_setTimestamp(Date, Y, M, D, Hh, Mm, Ss, 0, 0, 0);
+        _Else ->
+            ok = dpi:var_setFromBytes(Var, Idx, Bytes)
+    end,
     var_bind_row(RestVars, RestRow, Idx);
 var_bind_row([Var | RestVars], [Bytes | RestRow], Idx) ->
     var_bind_row([{Var, undefined, undefined} | RestVars], [Bytes | RestRow], Idx).

@@ -235,11 +235,9 @@ process_call({[<<"login">>], ReqData}, _Adapter, From, {SrcIp, _Port},
             end
     end;
 process_call({[<<"login">>], ReqData}, _Adapter, From, {SrcIp, _Port}, State) ->
-    io:format("Processing call ~p~n",[login_2]),
     login(ReqData, From, SrcIp, State);
 process_call({[<<"ping">>], _ReqData}, _Adapter, From, {SrcIp,_},
              #state{lock_state = LockState} = State) ->
-                 %io:format("Processing call ~p~n",[ping]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "ping"}, State),
     if LockState == unlocked ->
             reply(From, #{<<"ping">> => node()}, self()),
@@ -253,21 +251,18 @@ process_call({[<<"ping">>], _ReqData}, _Adapter, From, {SrcIp,_},
 % request (other than login above) which are NOT to be allowed without a login
 %
 process_call({[<<"logout">>], _ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[logout]),
     act_log(From, ?LOGIN_CONNECT, #{src => SrcIp, cmd => "logout"}, State),
     NewState = logout(State),
     reply(From, [{<<"logout">>, <<"ok">>}], self()),
     self() ! logout,
     NewState;
 process_call(Req, _Adapter, From, {SrcIp,_}, #state{user = <<>>} = State) ->
-    io:format("Processing call ~p~n",[not_logged_in]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "invalid", args => io_lib:format("~p", [Req])}, State),
     ?Debug("Request from a not logged in user: ~n~p", [Req]),
     reply(From, [{<<"error">>, <<"user not logged in">>}], self()),
     State;
 
 process_call(Req, _Adapter, From, {SrcIp,_}, #state{lock_state = locked} = State) ->
-    io:format("Processing call ~p~n",[session_locked]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "screensaver is enabled",
                              args => io_lib:format("~p", [Req])}, State),
     ?Debug("Request when screensaver is active from user: ~n~p", [Req]),
@@ -275,20 +270,17 @@ process_call(Req, _Adapter, From, {SrcIp,_}, #state{lock_state = locked} = State
     State;
 
 process_call({[<<"check_session">>], _ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[check_session]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "check_session"}, State),
     reply(From, #{check_session => <<"ok">>}, self()),
     State;
 
 process_call({[<<"check_connection">>], ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[check_connection]),
     BodyMap = jsx:decode(ReqData, [return_maps]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "check_connection", args => BodyMap}, State),
     reply(From, #{check_session => <<"ok">>}, self()),
     State;
 
 process_call({[<<"restart">>], _ReqData}, _Adapter, From, {SrcIp,_}, #state{sess = ErlImemSess} = State) ->
-    io:format("Processing call ~p~n",[restart]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "restart"}, State),
     case ErlImemSess:run_cmd(have_permission, [{dderl,restart}]) of
         true ->
@@ -308,7 +300,6 @@ process_call({[<<"restart">>], _ReqData}, _Adapter, From, {SrcIp,_}, #state{sess
     end,
     State;
 process_call({[<<"login_change_pswd">>], ReqData}, _Adapter, From, {SrcIp,_}, #state{sess = ErlImemSess} = State) ->
-    io:format("Processing call ~p~n",[login_change_pswd]),
     #{<<"change_pswd">> := BodyMap} = jsx:decode(ReqData, [return_maps]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "login_change_pswd", args => BodyMap}, State),
     User        = maps:get(<<"user">>, BodyMap, <<>>),
@@ -339,7 +330,6 @@ process_call({[<<"login_change_pswd">>], ReqData}, _Adapter, From, {SrcIp,_}, #s
     State;
 
 process_call({[<<"format_erlang_term">>], ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[format_erlang_term]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "format_erlang_term", args => ReqData}, State),
     [{<<"format_erlang_term">>, BodyJson}] = jsx:decode(ReqData),
     StringToFormat = proplists:get_value(<<"erlang_term">>, BodyJson, <<>>),
@@ -363,7 +353,6 @@ process_call({[<<"format_erlang_term">>], ReqData}, _Adapter, From, {SrcIp,_}, S
     State;
 
 process_call({[<<"format_json_to_save">>], ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[format_json_to_save]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "format_json_to_save", args => ReqData}, State),
     [{<<"format_json_to_save">>, BodyJson}] = jsx:decode(ReqData),
     StringToFormat = proplists:get_value(<<"json_string">>, BodyJson, <<>>),
@@ -381,7 +370,6 @@ process_call({[<<"format_json_to_save">>], ReqData}, _Adapter, From, {SrcIp,_}, 
     State;
 
 process_call({[<<"about">>], _ReqData}, _Adapter, From, {SrcIp,_}, State) ->
-    io:format("Processing call ~p~n",[about]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "about"}, State),
     case application:get_key(dderl, applications) of
         undefined -> Deps = [];
@@ -394,7 +382,6 @@ process_call({[<<"about">>], _ReqData}, _Adapter, From, {SrcIp,_}, State) ->
 
 process_call({[<<"connect_info">>], _ReqData}, _Adapter, From, {SrcIp,_},
              #state{sess=Sess, user_id=UserId, user = User} = State) ->
-                 io:format("Processing call ~p~n",[connect_info]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "connect_info"}, State),
     ConnInfo = case dderl_dal:get_adapters(Sess) of
         {error, Reason} when is_binary(Reason) -> #{error => Reason};
@@ -457,7 +444,6 @@ process_call({[<<"connect_info">>], _ReqData}, _Adapter, From, {SrcIp,_},
 
 process_call({[<<"del_con">>], ReqData}, _Adapter, From, {SrcIp,_},
              #state{sess = Sess, user_id = UserId} = State) ->
-                 io:format("Processing call ~p~n",[del_con]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "del_con", args => ReqData}, State),
     [{<<"del_con">>, BodyJson}] = jsx:decode(ReqData),
     ConId = proplists:get_value(<<"conid">>, BodyJson, 0),
@@ -478,7 +464,6 @@ process_call({[<<"background_color">>], ReqData}, _Adapter, From, {SrcIp,_}, #st
 
 process_call({[<<"activate_sender">>], ReqData}, _Adapter, From, {SrcIp,_},
              #state{active_sender = undefined} = State) ->
-                 io:format("Processing call ~p~n",[activate_sender]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "activate_sender", args => ReqData}, State),
     [{<<"activate_sender">>, BodyJson}] = jsx:decode(ReqData),
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
@@ -499,7 +484,6 @@ process_call({[<<"activate_sender">>], ReqData}, _Adapter, From, {SrcIp,_},
     end;
 process_call({[<<"activate_sender">>], ReqData}, Adapter, From, {SrcIp,_} = RemoteEp,
              #state{active_sender = PidSender} = State) ->
-                 io:format("Processing call ~p~n",[activate_sender_2]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "activate_sender", args => ReqData}, State),
     case erlang:is_process_alive(PidSender) of
         true ->
@@ -513,14 +497,12 @@ process_call({[<<"activate_sender">>], ReqData}, Adapter, From, {SrcIp,_} = Remo
 
 process_call({[<<"activate_receiver">>], _ReqData}, _Adapter, From, {SrcIp,_},
              #state{active_sender = undefined} = State) ->
-                 io:format("Processing call ~p~n",[activate_receiver]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "activate_receiver"}, State),
     ?Error("No active data sender found"), %% TODO: Log more
     reply(From, [{<<"activate_receiver">>, [{<<"error">>, <<"No table sending data">>}]}], self()),
     State;
 process_call({[<<"activate_receiver">>], ReqData}, _Adapter, From, {SrcIp,_},
              #state{active_sender = PidSender} = State) ->
-            io:format("Processing call ~p~n",[activate_receiver_232323]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "activate_receiver", args => ReqData}, State),
     case erlang:is_process_alive(PidSender) of
         true ->
@@ -544,7 +526,6 @@ process_call({[<<"activate_receiver">>], ReqData}, _Adapter, From, {SrcIp,_},
     end;
 process_call({[<<"receiver_status">>], ReqData}, _Adapter, From, {SrcIp,_},
              #state{active_receiver = PidReceiver} = State) ->
-                 io:format("Processing call ~p~n",[receiver_Status]),
     act_log(From, ?CMD_NOARGS, #{src => SrcIp, cmd => "receive_status", args => ReqData}, State),
     case PidReceiver /= undefined andalso erlang:is_process_alive(PidReceiver) of
         true ->
@@ -659,7 +640,6 @@ process_call({Cmd, ReqData}, Adapter, From, {SrcIp,_},
     NewCurrentPriv =
         try
             TmpPriv = Adapter:process_cmd({Cmd, BodyJson, Id}, Sess, UserId, From, CurrentPriv, self()),
-            io:format("post command ~p~n",[a]),
             self() ! rearm_session_idle_timer,
             TmpPriv
         catch Class:Error ->
@@ -692,9 +672,7 @@ spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, Self
         % ?Info("UserId ~p",[UserId]),
         % ?Info("SelfPid ~p",[SelfPid]),
         Adapter:process_cmd({Cmd, BodyJson}, Sess, UserId, From, CurrentPriv, SelfPid),
-        io:format("post command ~p~n",[b]),
-        SelfPid ! rearm_session_idle_timer,
-        io:format("post command ~p 2~n",[b])
+        SelfPid ! rearm_session_idle_timer
     catch Class:Error ->
             ?Error("Problem processing command: ~p:~p~n~p~n~p~n",
                    [Class, Error, BodyJson, erlang:get_stacktrace()]),
@@ -704,7 +682,6 @@ spawn_process_call(Adapter, CurrentPriv, From, Cmd, BodyJson, Sess, UserId, Self
 spawn_gen_process_call(Adapter, From, C, BodyJson, Sess, UserId, SelfPid) ->
     try
         gen_adapter:process_cmd({[C], BodyJson}, adapter_name(Adapter), Sess, UserId, From, undefined),
-        io:format("post command ~p~n",[c]),
         SelfPid ! rearm_session_idle_timer
     catch Class:Error ->
             ?Error("Problem processing command: ~p:~p~n~p~n", [Class, Error, erlang:get_stacktrace()]),

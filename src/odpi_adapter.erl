@@ -168,7 +168,6 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
     end;
 
 process_cmd({[<<"change_conn_pswd">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[change_pswd]),
     [{<<"change_pswd">>, BodyJson}] = ReqBody,
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     User     = proplists:get_value(<<"user">>, BodyJson, <<>>),
@@ -192,7 +191,6 @@ process_cmd({[<<"change_conn_pswd">>], ReqBody}, _Sess, _UserId, From, #priv{con
     end;
 
 process_cmd({[<<"disconnect">>], ReqBody, _SessionId}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[disconnect]),
     [{<<"disconnect">>, BodyJson}] = ReqBody,
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
@@ -212,7 +210,6 @@ process_cmd({[<<"disconnect">>], ReqBody, _SessionId}, _Sess, _UserId, From, #pr
             Priv
     end;
 process_cmd({[<<"remote_apps">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[remote_apps]),
     [{<<"remote_apps">>, BodyJson}] = ReqBody,
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
     case lists:member(Connection, Connections) of
@@ -228,7 +225,6 @@ process_cmd({[<<"remote_apps">>], ReqBody}, _Sess, _UserId, From, #priv{connecti
     end;
 
 process_cmd({[<<"query">>], ReqBody}, Sess, _UserId, From, #priv{connections = Connections} = Priv, SessPid) ->
-    io:format("Process command: ~p~n",[query]),
     [{<<"query">>,BodyJson}] = ReqBody,
     case make_binds(proplists:get_value(<<"binds">>, BodyJson, null)) of
         {error, Error} -> From ! {reply, jsx:encode([{<<"error">>, Error}])};
@@ -250,7 +246,6 @@ process_cmd({[<<"query">>], ReqBody}, Sess, _UserId, From, #priv{connections = C
     Priv;
 
 process_cmd({[<<"browse_data">>], ReqBody}, Sess, _UserId, From, #priv{connections = Connections} = Priv, SessPid) ->
-    io:format("Process command: ~p~n",[browse_data]),
     [{<<"browse_data">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
@@ -291,7 +286,6 @@ process_cmd({[<<"browse_data">>], ReqBody}, Sess, _UserId, From, #priv{connectio
                             ClientBinds = make_binds(proplists:get_value(<<"binds">>, BodyJson, null), CmdBinds),
                             case {CmdBinds, ClientBinds} of
                                 {[], _} ->
-                                    io:format(" process_query(C#ddCmd.command, Connection, SessPid). Args: ~p and ~p and ~p^n", [C#ddCmd.command, Connection, SessPid]),
                                     Resp = process_query(C#ddCmd.command, Connection, SessPid),
                                     RespJson = jsx:encode(
                                                  [{<<"browse_data">>,[{<<"content">>, C#ddCmd.command},
@@ -378,7 +372,6 @@ process_cmd({[<<"views">>], ReqBody}, Sess, UserId, From, Priv, SessPid) ->
 
 %  system views
 process_cmd({[<<"system_views">>], ReqBody}, Sess, _UserId, From, Priv, SessPid) ->
-    io:format("Process command: ~p~n",[system_views]),
     [{<<"system_views">>,BodyJson}] = ReqBody,
     ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>), %% This should be change to params...
     case dderl_dal:get_view(Sess, <<"All ddViews">>, odpi, system) of
@@ -402,7 +395,6 @@ process_cmd({[<<"system_views">>], ReqBody}, Sess, _UserId, From, Priv, SessPid)
 
 % open view by id
 process_cmd({[<<"open_view">>], ReqBody}, Sess, _UserId, From, #priv{connections = Connections} = Priv, SessPid) ->
-    io:format("Process command: ~p~n",[open_view]),
     [{<<"open_view">>, BodyJson}] = ReqBody,
     ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>),
     ViewId = proplists:get_value(<<"view_id">>, BodyJson),
@@ -422,7 +414,6 @@ process_cmd({[<<"open_view">>], ReqBody}, Sess, _UserId, From, #priv{connections
 
 % open view by name from inside a d3 graph
 process_cmd({[<<"open_graph_view">>], ReqBody}, Sess, UserId, From, #priv{connections = Connections} = Priv, SessPid) ->
-    io:format("Process command: ~p~n",[open_graph_view]),
     [{<<"open_graph_view">>, BodyJson}] = ReqBody,
     ConnId = proplists:get_value(<<"conn_id">>, BodyJson, <<>>),
     ViewName = proplists:get_value(<<"view_name">>, BodyJson),
@@ -445,7 +436,6 @@ process_cmd({[<<"open_graph_view">>], ReqBody}, Sess, UserId, From, #priv{connec
 
 % events
 process_cmd({[<<"sort">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[sort]),
     [{<<"sort">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     SrtSpc = proplists:get_value(<<"spec">>, BodyJson, []),
@@ -454,7 +444,6 @@ process_cmd({[<<"sort">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
     Statement:gui_req(sort, SortSpec, gui_resp_cb_fun(<<"sort">>, Statement, From)),
     Priv;
 process_cmd({[<<"filter">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[filter]),
     [{<<"filter">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     FltrSpec = proplists:get_value(<<"spec">>, BodyJson, []),
@@ -462,35 +451,30 @@ process_cmd({[<<"filter">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
     Statement:gui_req(filter, FilterSpec, gui_resp_cb_fun(<<"filter">>, Statement, From)),
     Priv;
 process_cmd({[<<"reorder">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[reorder]),
     [{<<"reorder">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     ColumnOrder = proplists:get_value(<<"column_order">>, BodyJson, []),
     Statement:gui_req(reorder, ColumnOrder, gui_resp_cb_fun(<<"reorder">>, Statement, From)),
     Priv;
 process_cmd({[<<"drop_table">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[drop_table]),
     [{<<"drop_table">>, BodyJson}] = ReqBody,
     TableNames = proplists:get_value(<<"table_names">>, BodyJson, []),
     Results = [process_table_cmd(drop_table, TableName, BodyJson, Connections) || TableName <- TableNames],
     send_result_table_cmd(From, <<"drop_table">>, Results),
     Priv;
 process_cmd({[<<"truncate_table">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[truncate_table]),
     [{<<"truncate_table">>, BodyJson}] = ReqBody,
     TableNames = proplists:get_value(<<"table_names">>, BodyJson, []),
     Results = [process_table_cmd(truncate_table, TableName, BodyJson, Connections) || TableName <- TableNames],
     send_result_table_cmd(From, <<"truncate_table">>, Results),
     Priv;
 process_cmd({[<<"snapshot_table">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[smapshot_table]),
     [{<<"snapshot_table">>, BodyJson}] = ReqBody,
     TableNames = proplists:get_value(<<"table_names">>, BodyJson, []),
     Results = [process_table_cmd(snapshot_table, TableName, BodyJson, Connections) || TableName <- TableNames],
     send_result_table_cmd(From, <<"snapshot_table">>, Results),
     Priv;
 process_cmd({[<<"restore_table">>], ReqBody}, _Sess, _UserId, From, #priv{connections = Connections} = Priv, _SessPid) ->
-    io:format("Process command: ~p~n",[restore_table]),
     [{<<"restore_table">>, BodyJson}] = ReqBody,
     TableNames = proplists:get_value(<<"table_names">>, BodyJson, []),
     Results = [process_table_cmd(restore_table, TableName, BodyJson, Connections) || TableName <- TableNames],
@@ -499,61 +483,42 @@ process_cmd({[<<"restore_table">>], ReqBody}, _Sess, _UserId, From, #priv{connec
 
 % gui button events
 process_cmd({[<<"button">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    io:format("Process command: ~p~n", [button]),
     [{<<"button">>,BodyJson}] = ReqBody,
     FsmStmt = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
-    io:format("Button Pass: ~p FsmStmt ~p~n", [1, FsmStmt]),
     case proplists:get_value(<<"btn">>, BodyJson, <<">">>) of
         <<"restart">> ->
-            io:format("Button Pass: ~p~n", [1.5]),
             Query = FsmStmt:get_query(),
-            io:format("Button Pass: ~p~n", [2]),
             case dderl_dal:is_local_query(Query) of
                 true ->
-                    io:format("Button Pass: ~p~n", [3]),
                     FsmStmt:gui_req(button, <<"restart">>, gui_resp_cb_fun(<<"button">>, FsmStmt, From));
                 _ ->
-                    io:format("Button Pass: ~p~n", [4]),
                     Connection = ?D2T(proplists:get_value(<<"connection">>, BodyJson, <<>>)),
-%% TODO: Fix restart if there is a need to link again.
+                    %% TODO: Fix restart if there is a need to link again.
                     BindVals = case make_binds(proplists:get_value(<<"binds">>, BodyJson, null)) of
-                                   {error, _Error} -> io:format("Button Pass: ~p~n", [5]), undefined;
-                                   
+                                   {error, _Error} -> undefined;
                                    BindVals0 -> BindVals0
                                end,
                     case dderlodpi:exec(Connection, Query, BindVals, imem_sql_expr:rownum_limit()) of
                         {ok, #stmtResults{} = StmtRslt, TableName} ->
-                            io:format("Button Pass: ~p~n", [6]),
                             dderlodpi:add_fsm(StmtRslt#stmtResults.stmtRefs, FsmStmt),
-                            io:format("Button Pass: ~p~n", [7]),
                             FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
-                            io:format("Button Pass: ~p~n", [8]),
                             FsmStmt:gui_req(button, <<"restart">>, gui_resp_cb_fun(<<"button">>, FsmStmt, From)),
-                            io:format("Button Pass: ~p~n", [9]),
                             FsmStmt:refresh_session_ctx(FsmCtx);
                         _ ->
-                            io:format("Button Pass: ~p~n", [11]),
                             From ! {reply, jsx:encode([{<<"button">>, [{<<"error">>, <<"unable to refresh the table">>}]}])}
                     end
             end;
         ButtonInt when is_integer(ButtonInt) ->
-            io:format("Button Pass: ~p~n", [12]),
             FsmStmt:gui_req(button, ButtonInt, gui_resp_cb_fun(<<"button">>, FsmStmt, From));
         ButtonBin when is_binary(ButtonBin) ->
-            io:format("Button Pass: ~p Binary ~p ~n", [13, ButtonBin]),
             case string:to_integer(binary_to_list(ButtonBin)) of
-                {error, _} -> io:format("Button Pass: ~p~n", [14]), Button = ButtonBin;
-                {Target, []} -> io:format("Button Pass: ~p~n", [15]), Button = Target
+                {error, _} -> Button = ButtonBin;
+                {Target, []} -> Button = Target
             end,
-            io:format("Button Pass: ~p Button ~p FsmStmt ~p From ~p ~n",[16, Button, FsmStmt, From]),
-            Res = FsmStmt:gui_req(button, Button, gui_resp_cb_fun(<<"button">>, FsmStmt, From)),
-            io:format("Button Pass: ~p Res ~p~n", [17, Res]),
-            Res
+            FsmStmt:gui_req(button, Button, gui_resp_cb_fun(<<"button">>, FsmStmt, From))
     end,
-    io:format("Button Pass: ~p~n", [18]),
     Priv;
 process_cmd({[<<"update_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    ?Debug("Process command: ~p~n", [update_data]),
     [{<<"update_data">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     RowId = proplists:get_value(<<"rowid">>, BodyJson, <<>>),
@@ -562,7 +527,6 @@ process_cmd({[<<"update_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid
     Statement:gui_req(update, [{RowId,upd,[{CellId,Value}]}], gui_resp_cb_fun(<<"update_data">>, Statement, From)),
     Priv;
 process_cmd({[<<"delete_row">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    ?Debug("Process command: ~p~n", [delete_row]),
     [{<<"delete_row">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     RowIds = proplists:get_value(<<"rowids">>, BodyJson, []),
@@ -571,7 +535,6 @@ process_cmd({[<<"delete_row">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid)
     Statement:gui_req(update, DelSpec, gui_resp_cb_fun(<<"delete_row">>, Statement, From)),
     Priv;
 process_cmd({[<<"insert_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    ?Debug("Process command: ~p~n", [insert_data]),
     [{<<"insert_data">>,BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     ClmIdx = proplists:get_value(<<"col">>, BodyJson, <<>>),
@@ -579,7 +542,6 @@ process_cmd({[<<"insert_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid
     Statement:gui_req(update, [{undefined,ins,[{ClmIdx,Value}]}], gui_resp_cb_fun(<<"insert_data">>, Statement, From)),
     Priv;
 process_cmd({[<<"paste_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid) ->
-    ?Debug("Process command: ~p~n", [paste_data]),
     [{<<"paste_data">>, BodyJson}] = ReqBody,
     Statement = binary_to_term(base64:decode(proplists:get_value(<<"statement">>, BodyJson, <<>>))),
     ReceivedRows = proplists:get_value(<<"rows">>, BodyJson, []),
@@ -587,7 +549,6 @@ process_cmd({[<<"paste_data">>], ReqBody}, _Sess, _UserId, From, Priv, _SessPid)
     Statement:gui_req(update, Rows, gui_resp_cb_fun(<<"paste_data">>, Statement, From)),
     Priv;
 process_cmd({[<<"download_query">>], ReqBody}, _Sess, UserId, From, Priv, SessPid) ->
-    ?Debug("Process command: ~p~n", [download_query]),
     [{<<"download_query">>, BodyJson}] = ReqBody,
     FileName = proplists:get_value(<<"fileToDownload">>, BodyJson, <<>>),
     Query = proplists:get_value(<<"queryToDownload">>, BodyJson, <<>>),
@@ -618,7 +579,6 @@ process_cmd({[<<"download_query">>], ReqBody}, _Sess, UserId, From, Priv, SessPi
     Priv;
 
 process_cmd({[<<"term_diff">>], ReqBody}, Sess, _UserId, From, Priv, SessPid) ->
-    ?Debug("Process command: ~p~n", [term_diff]),
     [{<<"term_diff">>, BodyJson}] = ReqBody,
     % Can't be handled directly as SessPid is not given to gen_adapter.
     gen_adapter:term_diff(BodyJson, Sess, SessPid, From),
@@ -626,7 +586,6 @@ process_cmd({[<<"term_diff">>], ReqBody}, Sess, _UserId, From, Priv, SessPid) ->
 
 % unsupported gui actions
 process_cmd({Cmd, BodyJson}, _Sess, _UserId, From, Priv, _SessPid) ->
-    ?Debug("Process command: ~p~n", [unsupported]),
     ?Error("unsupported command ~p content ~p and priv ~p", [Cmd, BodyJson, Priv]),
     CmdBin = lists:last(Cmd),
     From ! {reply, jsx:encode([{CmdBin,[{<<"error">>, <<"command '", CmdBin/binary, "' is unsupported">>}]}])},
@@ -668,13 +627,8 @@ disconnect(#priv{connections = Connections} = Priv) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -spec gui_resp_cb_fun(binary(), {atom(), pid()}, pid()) -> fun().
 gui_resp_cb_fun(Cmd, Statement, From) ->
-    io:format("gui_resp_cb_fun pass ~p Cmd ~p Stmt ~p From ~p ~n",[0, Cmd, Statement, From]),
     Clms = Statement:get_columns(),
-    %Clms = [{stmtCol,<<"12345">>,<<"12345">>,'SQLT_NUM',38,dynamic,false}],
-    io:format("gui_resp_cb_fun pass ~p Clms ~p ~n",[1, Clms]),
-    Ret = gen_adapter:build_resp_fun(Cmd, Clms, From),
-    io:format("gui_resp_cb_fun pass ~p ~n",[2]),
-    Ret.
+    gen_adapter:build_resp_fun(Cmd, Clms, From).
 
 -spec sort_json_to_term(list()) -> [tuple()].
 sort_json_to_term([]) -> [];
@@ -723,14 +677,12 @@ process_query({Query, BindVals}, Connection, SessPid) ->
     ?Info("check_funs: ~p ~n", [CheckFuns]), %% TODO: Debug
     process_query(CheckFuns, Query, BindVals, Connection, SessPid);
 process_query(Query, Connection, SessPid) ->
-    io:format("Process Query: ~p~n",[1]),
     process_query(check_funs(dderlodpi:exec(Connection, Query,
                                            imem_sql_expr:rownum_limit())),
                   Query, [], Connection, SessPid).
 
 -spec process_query(term(), binary(), list(), tuple(), pid()) -> list().
 process_query(ok, Query, BindVals, Connection, SessPid) ->
-    io:format("Process Query: ~p Query: ~p BindVals: ~p Connection: ~p SessPid: ~p ~n",[2, Query, BindVals, Connection, SessPid]),
     ?Debug([{session, Connection}], "query ~p -> ok", [Query]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     [{<<"result">>, <<"ok">>}];
@@ -738,7 +690,6 @@ process_query(ok, Query, BindVals, Connection, SessPid) ->
     %           {<<"ROWID">>,'SQLT_RDD',8,0,0}]};    %% hardcoded
 process_query({ok, #stmtResults{sortSpec = SortSpec, rowCols = Clms} = StmtRslt, TableName},
               Query, BindVals, #odpi_conn{} = Connection, SessPid) ->
-                  io:format("Process Query: ~p~n",[3]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     FsmCtx = generate_fsmctx(StmtRslt, Query, BindVals, Connection, TableName),
     StmtFsm = dderl_fsm:start(FsmCtx, SessPid),
@@ -753,16 +704,13 @@ process_query({ok, #stmtResults{sortSpec = SortSpec, rowCols = Clms} = StmtRslt,
      {<<"statement">>, base64:encode(term_to_binary(StmtFsm))},
      {<<"connection">>, ?E2B(Connection)}];
 process_query({ok, Values}, Query, BindVals, #odpi_conn{} = Connection, SessPid) ->
-    io:format("Process Query: ~p~n",[4]),
     SessPid ! {log_query, Query, process_log_binds(BindVals)},
     [{<<"data">>, Values},
      {<<"connection">>, ?E2B(Connection)}];
 process_query({error, Msg}, Query, BindVals, _Connection, _SessPid) when is_binary(Msg) ->
-    io:format("Process Query: ~p~n",[5]),
     ?Error("query error ~p for ~p whith bind values ~p", [Msg, Query, BindVals]),
     [{<<"error">>, Msg}];
 process_query(Error, Query, BindVals, _Connection, _SessPid) ->
-    io:format("Process Query: ~p~n",[6]),
     ?Error("query error ~p for ~p whith bind values ~p", [Error, Query, BindVals]),
     if
         is_binary(Error) ->
